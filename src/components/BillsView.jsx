@@ -55,9 +55,10 @@ export function BillsView({ state, setState }) {
         <p className="eyebrow">Bills</p>
         <h1>Sales vouchers</h1>
         <p className="lede">
-          Upload the bill analysis export from Teja. Others map directly to a
-          SALES journal; Discharge and Pharmacy are kept as raw sheets until
-          their working rules are added.
+          Upload the bill analysis export from Teja. Others and Pharmacy map
+          directly to a SALES journal (Pharmacy with CGST/SGST split when
+          taxable); Discharge is kept as a raw sheet until its working rules
+          are added.
         </p>
       </header>
 
@@ -85,18 +86,33 @@ export function BillsView({ state, setState }) {
             <StatRow label="Clean bills carried forward" value={stats.cleanRows.toLocaleString()} />
             <div className="divider" />
             <StatRow label="Others — mapped to SALES journal" value={stats.othersCount.toLocaleString()} />
+            <StatRow
+              label="Pharmacy — mapped to SALES journal"
+              value={`${stats.pharmacyCount.toLocaleString()} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt)`}
+            />
             <StatRow label="Discharge — held as raw sheet" value={stats.dischargeCount.toLocaleString()} />
-            <StatRow label="Pharmacy — held as raw sheet" value={stats.pharmacyCount.toLocaleString()} />
-            <StatRow label="SALES output rows (Others)" value={stats.salesOutputRows.toLocaleString()} />
+            <StatRow label="SALES output rows" value={stats.salesOutputRows.toLocaleString()} />
+            {stats.pharmacyTaxable > 0 && (
+              <>
+                <div className="divider" />
+                <StatRow
+                  label="Pharmacy CGST collected"
+                  value={stats.totalCgst.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                />
+                <StatRow
+                  label="Pharmacy SGST collected"
+                  value={stats.totalSgst.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                />
+              </>
+            )}
 
-            {(stats.dischargeCount > 0 || stats.pharmacyCount > 0) && (
+            {stats.dischargeCount > 0 && (
               <div className="note">
                 <span className="pill amber">Pending rules</span>
                 <p>
-                  Discharge and Pharmacy have their own working rules that
-                  aren't wired in yet. Those rows go to raw sheets in the
-                  download so nothing is lost — the SALES journal covers
-                  everything else.
+                  Discharge has its own working rules that aren't wired in yet. Those rows go
+                  to a raw sheet in the download so nothing is lost — the SALES journal covers
+                  Others and Pharmacy.
                 </p>
               </div>
             )}

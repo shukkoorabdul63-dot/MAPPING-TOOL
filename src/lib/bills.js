@@ -183,36 +183,70 @@ export function processBillsWorkbook(workbook) {
   // Pass 4: split into Discharge / Pharmacy (both) / Others, and build a
   // per-Bill-Name gross-amount summary for cross-checking against receipts.
   const dischargeRows = [];
-  const pharmacyRows = [];
   const othersRawRows = [];
+  const pharmacyMappedRows = []; // pharmacy rows that were mapped (audit trail)
   const salesRows = [];
   const grossByBillName = new Map();
+  let pharmacyTaxable = 0;
+  let pharmacyExempt = 0;
+  let totalCgst = 0;
+  let totalSgst = 0;
 
   for (const c of clean) {
     if (!grossByBillName.has(c.billName)) {
       grossByBillName.set(c.billName, { billName: c.billName, grossAmount: 0, count: 0 });
     }
-    const g = grossByBillName.get(c.billName);
-    g.grossAmount += c.grossAmount;
-    g.count += 1;
+    const gEntry = grossByBillName.get(c.billName);
+    gEntry.grossAmount += c.grossAmount;
+    gEntry.count += 1;
 
     const nameLower = c.billName.toLowerCase();
     if (nameLower === "discharge") {
       dischargeRows.push(rawRow(c));
       continue;
     }
+
+    const party = `${c.opNumber} - ${c.patientName}`;
+    const incomeHead = `${c.billName} INCOME-${c.ipop}`;
+
     if (PHARMACY_NAMES.has(nameLower)) {
-      pharmacyRows.push(rawRow(c));
+      // Pharmacy: taxable when VATAMOUNT > 0, else exempted.
+      // Taxable value = Gross − VAT (by design). When a bill mixes taxable and
+      // exempt items, the exempt portion is absorbed into the income line —
+      // this is intended, so the ledger stays balanced without a separate
+      // exempt-income split.
+      const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
+      pharmacyMappedRows.push(rawRow(c));
+
+      if (c.vatAmount > 0) {
+        pharmacyTaxable++;
+        const taxableValue = c.grossAmount - c.vatAmount;
+        const cgst = c.vatAmount / 2;
+        const sgst = c.vatAmount / 2;
+        totalCgst += cgst;
+        totalSgst += sgst;
+
+        salesRows.push(["Journal", c.date, c.billNo, party, drAmount, "DR", null, null]);
+        if (c.billDiscount > 0) {
+          salesRows.push(["Journal", c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+        }
+        salesRows.push(["Journal", c.date, c.billNo, incomeHead, taxableValue, "CR", null, c.doctorCode]);
+        salesRows.push(["Journal", c.date, c.billNo, "CGST", cgst, "CR", null, null]);
+        salesRows.push(["Journal", c.date, c.billNo, "SGST", sgst, "CR", null, null]);
+      } else {
+        pharmacyExempt++;
+        salesRows.push(["Journal", c.date, c.billNo, party, drAmount, "DR", null, null]);
+        if (c.billDiscount > 0) {
+          salesRows.push(["Journal", c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+        }
+        salesRows.push(["Journal", c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
+      }
       continue;
     }
 
+    // Others: fully mapped SALES journal entry (unchanged).
     othersRawRows.push(rawRow(c));
-
-    // Others: fully mapped SALES journal entry.
-    const party = `${c.opNumber} - ${c.patientName}`;
-    const incomeHead = `${c.billName} INCOME-${c.ipop}`;
     const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
-
     salesRows.push(["Journal", c.date, c.billNo, party, drAmount, "DR", null, null]);
     salesRows.push(["Journal", c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
     if (c.billDiscount > 0) {
@@ -226,7 +260,7 @@ export function processBillsWorkbook(workbook) {
 
   return {
     dischargeRows,
-    pharmacyRows,
+    pharmacyMappedRows,
     othersRawRows,
     salesRows,
     duplicateLogRows,
@@ -237,7 +271,11 @@ export function processBillsWorkbook(workbook) {
       duplicateGroupCount,
       duplicateRowCount,
       dischargeCount: dischargeRows.length,
-      pharmacyCount: pharmacyRows.length,
+      pharmacyCount: pharmacyMappedRows.length,
+      pharmacyTaxable,
+      pharmacyExempt,
+      totalCgst,
+      totalSgst,
       othersCount: othersRawRows.length,
       salesOutputRows: salesRows.length,
       cleanRows: clean.length,
@@ -246,7 +284,7 @@ export function processBillsWorkbook(workbook) {
 }
 
 export function buildBillsOutputWorkbook(result) {
-  const { dischargeRows, pharmacyRows, othersRawRows, salesRows, duplicateLogRows } = result;
+  const { dischargeRows, pharmacyMappedRows, salesRows, duplicateLogRows } = result;
   const wb = XLSX.utils.book_new();
 
   const salesCols = [
@@ -261,7 +299,7 @@ export function buildBillsOutputWorkbook(result) {
   ];
   const wsSales = XLSX.utils.aoa_to_sheet([SALES_HEADERS, ...salesRows]);
   wsSales["!cols"] = salesCols;
-  XLSX.utils.book_append_sheet(wb, wsSales, "OTHERS (SALES)");
+  XLSX.utils.book_append_sheet(wb, wsSales, "SALES");
 
   const rawCols = BILL_NEEDED_HEADERS.map((h) =>
     h === "PATIENTNAME" ? { wch: 26 } : h === "BILLNAME" ? { wch: 22 } : { wch: 14 }
@@ -271,9 +309,9 @@ export function buildBillsOutputWorkbook(result) {
   wsDischarge["!cols"] = rawCols;
   XLSX.utils.book_append_sheet(wb, wsDischarge, "DISCHARGE (raw)");
 
-  const wsPharmacy = XLSX.utils.aoa_to_sheet([BILL_NEEDED_HEADERS, ...pharmacyRows]);
+  const wsPharmacy = XLSX.utils.aoa_to_sheet([BILL_NEEDED_HEADERS, ...pharmacyMappedRows]);
   wsPharmacy["!cols"] = rawCols;
-  XLSX.utils.book_append_sheet(wb, wsPharmacy, "PHARMACY (raw)");
+  XLSX.utils.book_append_sheet(wb, wsPharmacy, "PHARMACY (source)");
 
   const wsDup = XLSX.utils.aoa_to_sheet([DUPLICATE_LOG_HEADERS, ...duplicateLogRows]);
   wsDup["!cols"] = [...rawCols, { wch: 46 }];

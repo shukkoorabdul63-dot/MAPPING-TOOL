@@ -1,13 +1,11 @@
 import React from "react";
 
-const EXCLUDED_NAMES = new Set(["pharmacy", "ip pharmacy", "discharge"]);
+const EXCLUDED_NAMES = new Set(["discharge"]);
 
-// Bill Names in the two source files aren't always identically spelled — the
-// receipts file uses e.g. "PHARMACY CASH BILL", the bills file uses "PHARMACY".
-// We can't reconcile those side by side without an explicit mapping table.
-// For now the reconciliation excludes Pharmacy and Discharge (as agreed) and
-// matches everything else on exact-name-equality after case-normalization,
-// listing any name found in only one side under "Unmatched".
+// Discharge is excluded from reconciliation because its working rules aren't
+// wired in yet. Pharmacy is now fully mapped (with GST split for taxable
+// bills), so it's included — but note the Bills side reports Gross Amount
+// while the Receipts side does too, so they should tie regardless of GST.
 function normalize(name) {
   return String(name || "").trim().toUpperCase();
 }
@@ -69,8 +67,8 @@ export function ReconcileView({ receiptResult, billsResult }) {
         <h1>Cross-check</h1>
         <p className="lede">
           Compares the Gross Amount total per Bill Name from the Receipts
-          export against the Bills export. Pharmacy and Discharge are excluded
-          since their totals are held pending working rules.
+          export against the Bills export. Discharge is excluded since its
+          working rules are still pending.
         </p>
       </header>
 
