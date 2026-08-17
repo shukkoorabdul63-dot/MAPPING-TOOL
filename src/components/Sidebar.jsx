@@ -3,6 +3,7 @@ import React from "react";
 const NAV = [
   { id: "receipts", label: "Receipts", hint: "Cash / Card / NEFT" },
   { id: "bills", label: "Bills", hint: "Sales / Income" },
+  { id: "reconcile", label: "Reconcile", hint: "Cross-check totals" },
 ];
 
 export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {

@@ -473,6 +473,29 @@ table.preview tr.total-row td {
   font-family: var(--font-mono);
 }
 
+.empty {
+  text-align: center;
+  padding: 1.5rem 1rem;
+}
+.empty-title {
+  margin: 0 0 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  text-align: left;
+}
+.empty-list li.done { color: var(--accent); }
+
 /* ==========================================================================
    Drawer (Workings)
    ========================================================================== */

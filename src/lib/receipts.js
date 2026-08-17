@@ -72,6 +72,7 @@ function processWorkbook(workbook) {
   const cCard = col("card");
   const cNeft = col("neft");
   const cIpCredit = col("ip credit");
+  const cGrossAmount = col("gross amount");
 
   if ([cBillNo, cPatientName, cOpNo, cCash, cCard, cNeft].some((v) => v == null)) {
     const missing = [];
@@ -114,6 +115,7 @@ function processWorkbook(workbook) {
     const card = toNumber(row[cCard]);
     const neft = toNumber(row[cNeft]);
     const ipCredit = cIpCredit != null ? toNumber(row[cIpCredit]) : 0;
+    const grossAmount = cGrossAmount != null ? toNumber(row[cGrossAmount]) : 0;
 
     candidates.push({
       billNo: String(billNo).trim(),
@@ -125,6 +127,7 @@ function processWorkbook(workbook) {
       card,
       neft,
       ipCredit,
+      grossAmount,
     });
   }
 
@@ -136,12 +139,13 @@ function processWorkbook(workbook) {
   for (const c of candidates) {
     const key = c.billName;
     if (!summaryMap.has(key)) {
-      summaryMap.set(key, { billName: key, cash: 0, card: 0, neft: 0, count: 0 });
+      summaryMap.set(key, { billName: key, cash: 0, card: 0, neft: 0, grossAmount: 0, count: 0 });
     }
     const entry = summaryMap.get(key);
     entry.cash += c.cash;
     entry.card += c.card;
     entry.neft += c.neft;
+    entry.grossAmount += c.grossAmount;
     entry.count += 1;
   }
   const billNameSummary = [...summaryMap.values()]

@@ -154,15 +154,12 @@ export function processBillsWorkbook(workbook) {
     notCancelled.push(c);
   }
 
-  // Pass 3: a repeated (Bill Number + Bill Name) combination is treated as
-  // a clear duplicate — the whole group is dropped, not just the repeat.
+  // Pass 3: Excel-style dedup on (Bill Number + Bill Name). When the same
+  // combination appears more than once (Teja emits identical bills once per
+  // PAYMENTCODE), keep the first row and drop the extras — otherwise the
+  // income would be counted multiple times.
   const groupKey = (c) => `${c.billNo}||${c.billName}`;
-  const countByGroup = new Map();
-  for (const c of notCancelled) {
-    const k = groupKey(c);
-    countByGroup.set(k, (countByGroup.get(k) || 0) + 1);
-  }
-
+  const seenGroups = new Set();
   const duplicateLogRows = [];
   let duplicateRowCount = 0;
   let duplicateGroupCount = 0;
@@ -170,26 +167,35 @@ export function processBillsWorkbook(workbook) {
   const clean = [];
   for (const c of notCancelled) {
     const k = groupKey(c);
-    const count = countByGroup.get(k);
-    if (count > 1) {
+    if (seenGroups.has(k)) {
       duplicateRowCount++;
       if (!seenGroupsForCount.has(k)) {
         seenGroupsForCount.add(k);
         duplicateGroupCount++;
       }
-      duplicateLogRows.push([...rawRow(c), `Duplicate Bill No. + Bill Name (${count} occurrences) — entire group removed`]);
+      duplicateLogRows.push([...rawRow(c), `Duplicate Bill No. + Bill Name — kept the first row, dropped this one`]);
       continue;
     }
+    seenGroups.add(k);
     clean.push(c);
   }
 
-  // Pass 4: split into Discharge / Pharmacy (both) / Others
+  // Pass 4: split into Discharge / Pharmacy (both) / Others, and build a
+  // per-Bill-Name gross-amount summary for cross-checking against receipts.
   const dischargeRows = [];
   const pharmacyRows = [];
   const othersRawRows = [];
   const salesRows = [];
+  const grossByBillName = new Map();
 
   for (const c of clean) {
+    if (!grossByBillName.has(c.billName)) {
+      grossByBillName.set(c.billName, { billName: c.billName, grossAmount: 0, count: 0 });
+    }
+    const g = grossByBillName.get(c.billName);
+    g.grossAmount += c.grossAmount;
+    g.count += 1;
+
     const nameLower = c.billName.toLowerCase();
     if (nameLower === "discharge") {
       dischargeRows.push(rawRow(c));
@@ -214,12 +220,17 @@ export function processBillsWorkbook(workbook) {
     }
   }
 
+  const billGrossByName = [...grossByBillName.values()].sort(
+    (a, b) => b.grossAmount - a.grossAmount
+  );
+
   return {
     dischargeRows,
     pharmacyRows,
     othersRawRows,
     salesRows,
     duplicateLogRows,
+    billGrossByName,
     stats: {
       scannedDataRows,
       cancelledCount,

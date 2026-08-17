@@ -3,19 +3,29 @@ import { Sidebar } from "./components/Sidebar.jsx";
 import { WorkingsPanel } from "./components/WorkingsPanel.jsx";
 import { ReceiptsView } from "./components/ReceiptsView.jsx";
 import { BillsView } from "./components/BillsView.jsx";
+import { ReconcileView } from "./components/ReconcileView.jsx";
 import { DEFAULT_LEDGER_NAMES } from "./lib/tokens.js";
 import "./styles.css";
+
+const EMPTY_VIEW_STATE = {
+  fileName: null,
+  status: "idle",
+  error: null,
+  result: null,
+  showPreview: false,
+};
 
 export default function App() {
   const [activeView, setActiveView] = useState("receipts");
   const [workingsOpen, setWorkingsOpen] = useState(false);
   const [ledgerNames, setLedgerNames] = useState(DEFAULT_LEDGER_NAMES);
-  const [receiptResult, setReceiptResult] = useState(null);
-  const [billsResult, setBillsResult] = useState(null);
+  const [receiptsState, setReceiptsState] = useState(EMPTY_VIEW_STATE);
+  const [billsState, setBillsState] = useState(EMPTY_VIEW_STATE);
 
   const counts = {
-    receipts: receiptResult?.stats?.candidateBills ?? null,
-    bills: billsResult?.stats?.scannedDataRows ?? null,
+    receipts: receiptsState.result?.stats?.candidateBills ?? null,
+    bills: billsState.result?.stats?.scannedDataRows ?? null,
+    reconcile: null,
   };
 
   return (
@@ -28,9 +38,21 @@ export default function App() {
       />
       <main className="workspace">
         {activeView === "receipts" && (
-          <ReceiptsView ledgerNames={ledgerNames} onResult={setReceiptResult} />
+          <ReceiptsView
+            ledgerNames={ledgerNames}
+            state={receiptsState}
+            setState={setReceiptsState}
+          />
         )}
-        {activeView === "bills" && <BillsView onResult={setBillsResult} />}
+        {activeView === "bills" && (
+          <BillsView state={billsState} setState={setBillsState} />
+        )}
+        {activeView === "reconcile" && (
+          <ReconcileView
+            receiptResult={receiptsState.result}
+            billsResult={billsState.result}
+          />
+        )}
       </main>
       <WorkingsPanel
         open={workingsOpen}

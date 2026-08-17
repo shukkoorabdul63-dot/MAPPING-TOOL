@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback } from "react";
 import * as XLSX from "xlsx";
 import { processBillsWorkbook, buildBillsOutputWorkbook } from "../lib/bills.js";
 import { downloadWorkbook } from "../lib/utils.js";
@@ -10,19 +10,13 @@ const STATUS_LABELS = {
   error: "Could not process this file",
 };
 
-export function BillsView({ onResult }) {
-  const [fileName, setFileName] = useState(null);
-  const [status, setStatus] = useState("idle");
-  const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
-  const [showPreview, setShowPreview] = useState(false);
+export function BillsView({ state, setState }) {
+  const { fileName, status, error, result, showPreview } = state;
+  const patch = useCallback((updates) => setState((s) => ({ ...s, ...updates })), [setState]);
 
   const handleFile = useCallback(
     (file) => {
-      setFileName(file.name);
-      setStatus("processing");
-      setError(null);
-      setResult(null);
+      patch({ fileName: file.name, status: "processing", error: null, result: null });
       const reader = new FileReader();
       reader.onload = (e) => {
         setTimeout(() => {
@@ -30,32 +24,20 @@ export function BillsView({ onResult }) {
             const data = new Uint8Array(e.target.result);
             const workbook = XLSX.read(data, { type: "array", cellDates: true });
             const r = processBillsWorkbook(workbook);
-            setResult(r);
-            setStatus("done");
-            onResult?.(r);
+            patch({ result: r, status: "done" });
           } catch (err) {
-            setError(err.message || "Something went wrong.");
-            setStatus("error");
+            patch({ error: err.message || "Something went wrong.", status: "error" });
           }
         }, 30);
       };
-      reader.onerror = () => {
-        setError("Could not read this file.");
-        setStatus("error");
-      };
+      reader.onerror = () => patch({ error: "Could not read this file.", status: "error" });
       reader.readAsArrayBuffer(file);
     },
-    [onResult]
+    [patch]
   );
 
-  const reset = () => {
-    setFileName(null);
-    setStatus("idle");
-    setError(null);
-    setResult(null);
-    setShowPreview(false);
-    onResult?.(null);
-  };
+  const reset = () =>
+    patch({ fileName: null, status: "idle", error: null, result: null, showPreview: false });
 
   const download = () => {
     if (!result) return;
@@ -97,7 +79,7 @@ export function BillsView({ onResult }) {
             <StatRow label="Bill rows scanned" value={stats.scannedDataRows.toLocaleString()} />
             <StatRow label="Cancelled bills removed" value={stats.cancelledCount.toLocaleString()} />
             <StatRow
-              label="Duplicate (Bill No. + Bill Name) rows removed"
+              label="Duplicate rows removed (kept first, dropped extras)"
               value={`${stats.duplicateRowCount.toLocaleString()} across ${stats.duplicateGroupCount.toLocaleString()} groups`}
             />
             <StatRow label="Clean bills carried forward" value={stats.cleanRows.toLocaleString()} />
@@ -123,7 +105,7 @@ export function BillsView({ onResult }) {
 
             <Toggle
               checked={showPreview}
-              onChange={setShowPreview}
+              onChange={(v) => patch({ showPreview: v })}
               label="Preview SALES journal rows"
               description="First 12 rows of the mapped Others journal"
             />
