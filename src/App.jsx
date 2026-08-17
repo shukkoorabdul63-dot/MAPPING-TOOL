@@ -97,15 +97,26 @@ function processWorkbook(workbook) {
   const cBillDate = col("bill date");
   const cBillNo = col("billnumber");
   const cPatientName = col("patient name");
-  const cOpNo = col("op no");
+  // Teja exports label the patient-identifier column differently across
+  // reports — sometimes "OP NO", sometimes "UHID". Accept either.
+  const cOpNo = col("op no") ?? col("uhid");
   const cCash = col("cash") ?? col("cash ");
   const cCard = col("card");
   const cNeft = col("neft");
   const cIpCredit = col("ip credit");
 
   if ([cBillNo, cPatientName, cOpNo, cCash, cCard, cNeft].some((v) => v == null)) {
+    const missing = [];
+    if (cBillNo == null) missing.push("Billnumber");
+    if (cPatientName == null) missing.push("Patient Name");
+    if (cOpNo == null) missing.push("OP NO / UHID");
+    if (cCash == null) missing.push("Cash");
+    if (cCard == null) missing.push("Card");
+    if (cNeft == null) missing.push("NEFT");
     throw new Error(
-      "One or more required columns (Billnumber, Patient Name, OP NO, Cash, Card, NEFT) were not found in the header row."
+      `Could not find the following required column(s) in the header row: ${missing.join(
+        ", "
+      )}. Check that this is a Detailed Bill Register export from Teja.`
     );
   }
 
