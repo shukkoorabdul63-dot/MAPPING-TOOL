@@ -65,6 +65,48 @@ const REVIEW_HEADERS = [
   "Reason",
 ];
 
+// Ledger label placeholders. Rows store these tokens instead of a literal
+// ledger name, so the actual Tally ledger name (set via the "Workings"
+// panel) can change without reprocessing the source file.
+const LEDGER_TOKEN = { CASH: "$CASH$", CARD: "$CARD$", NEFT: "$NEFT$" };
+
+// Voucher-type token for a duplicated bill number's second Receipt — lets
+// the alternate voucher type name (e.g. "Receipt 2") be edited later
+// without reprocessing.
+const RECEIPT_ALT_TOKEN = "$RECEIPT_ALT$";
+
+const DEFAULT_LEDGER_NAMES = {
+  cash: "CASH",
+  card: "CARD",
+  neft: "UPI/NEFT",
+  altVoucherType: "Receipt 2",
+};
+
+function resolveLedgerToken(value, ledgerNames) {
+  if (value === LEDGER_TOKEN.CASH) return ledgerNames.cash || DEFAULT_LEDGER_NAMES.cash;
+  if (value === LEDGER_TOKEN.CARD) return ledgerNames.card || DEFAULT_LEDGER_NAMES.card;
+  if (value === LEDGER_TOKEN.NEFT) return ledgerNames.neft || DEFAULT_LEDGER_NAMES.neft;
+  if (value === RECEIPT_ALT_TOKEN)
+    return ledgerNames.altVoucherType || DEFAULT_LEDGER_NAMES.altVoucherType;
+  return value;
+}
+
+function resolveRows(rows, ledgerNames) {
+  return rows.map((row) => row.map((cell) => resolveLedgerToken(cell, ledgerNames)));
+}
+
+// Decides the Voucher Type string to use for a given occurrence of a
+// duplicated bill number. Occurrence 1 keeps the plain type. Occurrence 2
+// of a Receipt uses the user-configurable alternate name (default
+// "Receipt 2"). Anything beyond that (rare) gets an auto-numbered suffix
+// so it never collides with an already-used Voucher Type + Voucher No.
+// combination.
+function voucherTypeForOccurrence(baseType, occurrenceIndex) {
+  if (occurrenceIndex <= 1) return baseType;
+  if (occurrenceIndex === 2 && baseType === "Receipt") return RECEIPT_ALT_TOKEN;
+  return `${baseType} ${occurrenceIndex}`;
+}
+
 function processWorkbook(workbook) {
   const sheetName = workbook.SheetNames[0];
   const ws = workbook.Sheets[sheetName];
@@ -180,21 +222,48 @@ function processWorkbook(workbook) {
     .map((e) => ({ ...e, total: e.cash + e.card + e.neft }))
     .sort((a, b) => b.total - a.total);
 
-  // Pass 2: find duplicate bill numbers
+  // Pass 2: find duplicate bill numbers, and track each row's occurrence
+  // index within its bill-number group (in file order) so duplicates can
+  // be auto-resolved with an alternate Voucher Type instead of excluded.
   const countByBillNo = new Map();
   for (const c of candidates) {
     countByBillNo.set(c.billNo, (countByBillNo.get(c.billNo) || 0) + 1);
   }
+  const seenSoFar = new Map();
 
   const receiptRows = [];
+  const paymentRows = [];
+  const creditNoteRows = [];
   const reviewRows = [];
   let skippedZero = 0;
   let paymentCount = 0;
   let receiptCount = 0;
+  let creditNoteCount = 0;
   let duplicateRowCount = 0;
 
   for (const c of candidates) {
-    const isDuplicate = countByBillNo.get(c.billNo) > 1;
+    const totalForBillNo = countByBillNo.get(c.billNo);
+    const occurrenceIndex = (seenSoFar.get(c.billNo) || 0) + 1;
+    seenSoFar.set(c.billNo, occurrenceIndex);
+    const isDuplicate = totalForBillNo > 1;
+
+    const party = `${c.patientId} - ${c.patientName}`;
+    const negativeCashAmount = c.cash < 0 ? Math.abs(c.cash) : 0;
+    const negativeIpCreditAmount = c.ipCredit < 0 ? Math.abs(c.ipCredit) : 0;
+    const receiptCash = c.cash > 0 ? c.cash : 0;
+    const receiptCard = c.card > 0 ? c.card : 0;
+    const receiptNeft = c.neft > 0 ? c.neft : 0;
+    const receiptTotal = receiptCash + receiptCard + receiptNeft;
+
+    if (
+      negativeCashAmount === 0 &&
+      negativeIpCreditAmount === 0 &&
+      receiptTotal === 0
+    ) {
+      skippedZero++;
+      continue;
+    }
+
     if (isDuplicate) {
       duplicateRowCount++;
       reviewRows.push([
@@ -206,32 +275,39 @@ function processWorkbook(workbook) {
         c.card,
         c.neft,
         c.ipCredit,
-        "Duplicate Bill Number across upload batch",
+        `Duplicate #${occurrenceIndex} of ${totalForBillNo} — auto-resolved with an alternate voucher type, see voucher sheets`,
       ]);
-      continue;
     }
 
-    const party = `${c.patientId} - ${c.patientName}`;
-    const paymentAmount = c.cash < 0 ? Math.abs(c.cash) : 0;
-    const receiptCash = c.cash > 0 ? c.cash : 0;
-    const receiptCard = c.card > 0 ? c.card : 0;
-    const receiptNeft = c.neft > 0 ? c.neft : 0;
-    const receiptTotal = receiptCash + receiptCard + receiptNeft;
-
-    if (paymentAmount === 0 && receiptTotal === 0) {
-      skippedZero++;
-      continue;
-    }
-
-    if (paymentAmount > 0) {
+    // Negative Cash: two things happen —
+    //   1) the income for this bill is reversed (Credit Note): Bill Name Dr, Party Cr
+    //   2) the cash itself is refunded (Payment): Party Dr, Cash ledger Cr
+    if (negativeCashAmount > 0) {
       paymentCount++;
-      // Party debited, Cash credited
-      receiptRows.push([
-        "Payment",
+      const vType = voucherTypeForOccurrence("Payment", occurrenceIndex);
+      paymentRows.push([vType, c.date, c.billNo, party, negativeCashAmount, "DR", null, null, null, null, null]);
+      paymentRows.push([
+        vType,
         c.date,
         c.billNo,
-        party,
-        paymentAmount,
+        LEDGER_TOKEN.CASH,
+        negativeCashAmount,
+        "CR",
+        null,
+        null,
+        null,
+        null,
+        null,
+      ]);
+
+      creditNoteCount++;
+      const cnType = voucherTypeForOccurrence("Credit Note", occurrenceIndex);
+      creditNoteRows.push([
+        cnType,
+        c.date,
+        c.billNo,
+        c.billName,
+        negativeCashAmount,
         "DR",
         null,
         null,
@@ -239,12 +315,45 @@ function processWorkbook(workbook) {
         null,
         null,
       ]);
-      receiptRows.push([
-        "Payment",
+      creditNoteRows.push([
+        cnType,
         c.date,
         c.billNo,
-        "CASH",
-        paymentAmount,
+        party,
+        negativeCashAmount,
+        "CR",
+        null,
+        null,
+        null,
+        null,
+        null,
+      ]);
+    }
+
+    // Negative IP Credit alone: a billing/credit revision with no cash
+    // movement — still an income reversal, so it also gets a Credit Note.
+    if (negativeIpCreditAmount > 0) {
+      creditNoteCount++;
+      const cnType = voucherTypeForOccurrence("Credit Note", occurrenceIndex);
+      creditNoteRows.push([
+        cnType,
+        c.date,
+        c.billNo,
+        c.billName,
+        negativeIpCreditAmount,
+        "DR",
+        null,
+        null,
+        null,
+        null,
+        null,
+      ]);
+      creditNoteRows.push([
+        cnType,
+        c.date,
+        c.billNo,
+        party,
+        negativeIpCreditAmount,
         "CR",
         null,
         null,
@@ -256,25 +365,14 @@ function processWorkbook(workbook) {
 
     if (receiptTotal > 0) {
       receiptCount++;
-      receiptRows.push([
-        "Receipt",
-        c.date,
-        c.billNo,
-        party,
-        receiptTotal,
-        "CR",
-        null,
-        null,
-        null,
-        null,
-        null,
-      ]);
+      const rType = voucherTypeForOccurrence("Receipt", occurrenceIndex);
+      receiptRows.push([rType, c.date, c.billNo, party, receiptTotal, "CR", null, null, null, null, null]);
       if (receiptCash > 0) {
         receiptRows.push([
-          "Receipt",
+          rType,
           c.date,
           c.billNo,
-          "CASH",
+          LEDGER_TOKEN.CASH,
           receiptCash,
           "DR",
           null,
@@ -286,10 +384,10 @@ function processWorkbook(workbook) {
       }
       if (receiptCard > 0) {
         receiptRows.push([
-          "Receipt",
+          rType,
           c.date,
           c.billNo,
-          "CARD",
+          LEDGER_TOKEN.CARD,
           receiptCard,
           "DR",
           null,
@@ -301,10 +399,10 @@ function processWorkbook(workbook) {
       }
       if (receiptNeft > 0) {
         receiptRows.push([
-          "Receipt",
+          rType,
           c.date,
           c.billNo,
-          "UPI/NEFT",
+          LEDGER_TOKEN.NEFT,
           receiptNeft,
           "DR",
           null,
@@ -319,6 +417,8 @@ function processWorkbook(workbook) {
 
   return {
     receiptRows,
+    paymentRows,
+    creditNoteRows,
     reviewRows,
     billNameSummary,
     stats: {
@@ -330,17 +430,23 @@ function processWorkbook(workbook) {
       skippedZero,
       paymentCount,
       receiptCount,
-      outputRows: receiptRows.length,
+      creditNoteCount,
+      outputRows: receiptRows.length + paymentRows.length + creditNoteRows.length,
     },
   };
 }
 
-function buildOutputWorkbook(receiptRows, reviewRows, billNameSummary) {
+function buildOutputWorkbook(
+  receiptRows,
+  paymentRows,
+  creditNoteRows,
+  reviewRows,
+  billNameSummary,
+  ledgerNames
+) {
   const wb = XLSX.utils.book_new();
 
-  const receiptAoa = [RECEIPT_HEADERS, ...receiptRows];
-  const wsReceipt = XLSX.utils.aoa_to_sheet(receiptAoa);
-  wsReceipt["!cols"] = [
+  const stdCols = [
     { wch: 14 },
     { wch: 11 },
     { wch: 14 },
@@ -353,7 +459,18 @@ function buildOutputWorkbook(receiptRows, reviewRows, billNameSummary) {
     { wch: 14 },
     { wch: 12 },
   ];
-  XLSX.utils.book_append_sheet(wb, wsReceipt, "RECEIPT");
+
+  const addVoucherSheet = (rows, sheetName) => {
+    const resolved = resolveRows(rows, ledgerNames);
+    const aoa = [RECEIPT_HEADERS, ...resolved];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = stdCols;
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  };
+
+  addVoucherSheet(receiptRows, "RECEIPT");
+  addVoucherSheet(paymentRows, "PAYMENT");
+  addVoucherSheet(creditNoteRows, "CREDIT NOTE");
 
   const reviewAoa = [REVIEW_HEADERS, ...reviewRows];
   const wsReview = XLSX.utils.aoa_to_sheet(reviewAoa);
@@ -368,7 +485,7 @@ function buildOutputWorkbook(receiptRows, reviewRows, billNameSummary) {
     { wch: 10 },
     { wch: 34 },
   ];
-  XLSX.utils.book_append_sheet(wb, wsReview, "NEEDS REVIEW");
+  XLSX.utils.book_append_sheet(wb, wsReview, "DUPLICATE LOG");
 
   if (billNameSummary && billNameSummary.length) {
     const totals = billNameSummary.reduce(
@@ -397,6 +514,18 @@ function buildOutputWorkbook(receiptRows, reviewRows, billNameSummary) {
     ];
     XLSX.utils.book_append_sheet(wb, wsSummary, "SUMMARY BY BILL TYPE");
   }
+
+  const ledgerAoa = [
+    ["Payment Mode", "Tally Ledger Name Used"],
+    ["Cash", ledgerNames.cash || DEFAULT_LEDGER_NAMES.cash],
+    ["Card", ledgerNames.card || DEFAULT_LEDGER_NAMES.card],
+    ["NEFT", ledgerNames.neft || DEFAULT_LEDGER_NAMES.neft],
+    [],
+    ["Duplicate bill numbers — alternate voucher type", ledgerNames.altVoucherType || DEFAULT_LEDGER_NAMES.altVoucherType],
+  ];
+  const wsLedger = XLSX.utils.aoa_to_sheet(ledgerAoa);
+  wsLedger["!cols"] = [{ wch: 42 }, { wch: 28 }];
+  XLSX.utils.book_append_sheet(wb, wsLedger, "LEDGERS USED");
 
   return wb;
 }
@@ -437,6 +566,7 @@ function Toggle({ checked, onChange, label, description }) {
 const VOUCHER_TAG_STYLES = {
   Receipt: "tag-receipt",
   Payment: "tag-payment",
+  "Credit Note": "tag-creditnote",
 };
 
 export default function TejaReceiptMapper() {
@@ -446,6 +576,8 @@ export default function TejaReceiptMapper() {
   const [result, setResult] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [showWorkings, setShowWorkings] = useState(false);
+  const [ledgerNames, setLedgerNames] = useState(DEFAULT_LEDGER_NAMES);
   const fileInputRef = useRef(null);
 
   const handleFile = useCallback((file) => {
@@ -461,8 +593,9 @@ export default function TejaReceiptMapper() {
         try {
           const data = new Uint8Array(e.target.result);
           const workbook = XLSX.read(data, { type: "array", cellDates: true });
-          const { receiptRows, reviewRows, billNameSummary, stats } = processWorkbook(workbook);
-          setResult({ receiptRows, reviewRows, billNameSummary, stats });
+          const { receiptRows, paymentRows, creditNoteRows, reviewRows, billNameSummary, stats } =
+            processWorkbook(workbook);
+          setResult({ receiptRows, paymentRows, creditNoteRows, reviewRows, billNameSummary, stats });
           setStatus("done");
         } catch (err) {
           setError(err.message || "Something went wrong while processing this file.");
@@ -506,13 +639,29 @@ export default function TejaReceiptMapper() {
 
   const downloadReceipt = () => {
     if (!result) return;
-    const wb = buildOutputWorkbook(result.receiptRows, result.reviewRows, result.billNameSummary);
+    const wb = buildOutputWorkbook(
+      result.receiptRows,
+      result.paymentRows,
+      result.creditNoteRows,
+      result.reviewRows,
+      result.billNameSummary,
+      ledgerNames
+    );
     const base = (fileName || "teja_export").replace(/\.[^/.]+$/, "");
     downloadWorkbook(wb, `${base}_TALLY_MAPPED.xlsx`);
   };
 
   const stats = result?.stats;
-  const previewRows = result?.receiptRows?.slice(0, 12) ?? [];
+  const previewRows = result
+    ? resolveRows(
+        [
+          ...result.receiptRows.slice(0, 6),
+          ...result.paymentRows.slice(0, 4),
+          ...result.creditNoteRows.slice(0, 4),
+        ],
+        ledgerNames
+      )
+    : [];
 
   return (
     <div className="page">
@@ -685,6 +834,7 @@ export default function TejaReceiptMapper() {
           border-radius: 9px;
           margin-top: 1.15rem;
         }
+        .stamp-wrap.resolved { background: #eaf5f3; border-color: #bfe0da; }
         .stamp {
           font-family: 'IBM Plex Mono', monospace;
           font-weight: 600;
@@ -698,7 +848,9 @@ export default function TejaReceiptMapper() {
           flex-shrink: 0;
           text-transform: uppercase;
         }
+        .stamp.resolved { color: var(--teal-deep); border-color: var(--teal-deep); }
         .stamp-text { font-size: 0.85rem; color: #7a3129; line-height: 1.5; }
+        .stamp-text.resolved { color: #1f4a42; }
 
         /* --- Uniform button system --- */
         .btn-row { display: flex; gap: 0.7rem; margin-top: 1.5rem; flex-wrap: wrap; }
@@ -790,6 +942,7 @@ export default function TejaReceiptMapper() {
         }
         .tag-receipt { background: #e4f2f0; color: var(--teal-deep); }
         .tag-payment { background: var(--alert-bg); color: var(--alert); }
+        .tag-creditnote { background: #fbf1de; color: #96702b; }
         .preview-note {
           font-size: 0.76rem;
           color: var(--ink-muted);
@@ -814,6 +967,35 @@ export default function TejaReceiptMapper() {
           line-height: 1.65;
           font-family: 'IBM Plex Mono', monospace;
         }
+
+        .workings-btn { flex-shrink: 0; }
+        .workings-card { margin-top: -0.5rem; }
+        .workings-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+          gap: 0.9rem;
+        }
+        .workings-field { display: flex; flex-direction: column; gap: 0.4rem; }
+        .workings-field span {
+          font-size: 0.76rem;
+          font-weight: 600;
+          color: var(--ink-muted);
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+        .workings-field input {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 0.88rem;
+          padding: 0.55rem 0.7rem;
+          border: 1.5px solid var(--border);
+          border-radius: 7px;
+          background: #fbfdfc;
+          color: var(--ink);
+          outline: none;
+          transition: border-color 0.15s ease;
+        }
+        .workings-field input:focus { border-color: var(--teal); }
+        .workings-field input::placeholder { color: #a9b6b9; }
       `}</style>
 
       <div className="sheet">
@@ -823,15 +1005,90 @@ export default function TejaReceiptMapper() {
               <path d="M4 12l6 6L20 6" stroke="#f1faee" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <p className="eyebrow">Teja → Tally · Receipt Voucher Mapper</p>
             <h1>Detailed Bill Register Converter</h1>
           </div>
+          <button
+            className="btn btn-ghost btn-sm workings-btn"
+            onClick={() => setShowWorkings((v) => !v)}
+            aria-expanded={showWorkings}
+          >
+            {showWorkings ? "Close" : "Workings"}
+          </button>
         </div>
+
+        {showWorkings && (
+          <div className="card workings-card">
+            <div className="card-inner">
+              <p className="section-title" style={{ marginBottom: "0.3rem" }}>
+                Ledger names
+              </p>
+              <p className="preview-note" style={{ marginTop: 0, marginBottom: "1.1rem" }}>
+                Enter the exact ledger name as it exists in Tally for each
+                mode — e.g. Card might post to "Swipe Control", NEFT might
+                post to "Google Pay Account". Leave blank to use the default.
+              </p>
+              <div className="workings-grid">
+                <label className="workings-field">
+                  <span>Cash ledger</span>
+                  <input
+                    type="text"
+                    placeholder={DEFAULT_LEDGER_NAMES.cash}
+                    value={ledgerNames.cash}
+                    onChange={(e) => setLedgerNames((v) => ({ ...v, cash: e.target.value }))}
+                  />
+                </label>
+                <label className="workings-field">
+                  <span>Card ledger</span>
+                  <input
+                    type="text"
+                    placeholder={DEFAULT_LEDGER_NAMES.card}
+                    value={ledgerNames.card}
+                    onChange={(e) => setLedgerNames((v) => ({ ...v, card: e.target.value }))}
+                  />
+                </label>
+                <label className="workings-field">
+                  <span>NEFT ledger</span>
+                  <input
+                    type="text"
+                    placeholder={DEFAULT_LEDGER_NAMES.neft}
+                    value={ledgerNames.neft}
+                    onChange={(e) => setLedgerNames((v) => ({ ...v, neft: e.target.value }))}
+                  />
+                </label>
+              </div>
+
+              <div className="divider" />
+
+              <p className="section-title" style={{ marginBottom: "0.3rem" }}>
+                Duplicate bill numbers
+              </p>
+              <p className="preview-note" style={{ marginTop: 0, marginBottom: "1.1rem" }}>
+                When the same Bill Number appears more than once in one
+                upload batch, Tally rejects it as a duplicate voucher. The
+                second occurrence is automatically posted under this
+                alternate Voucher Type instead, so both go through cleanly.
+              </p>
+              <div className="workings-grid">
+                <label className="workings-field">
+                  <span>Alternate Receipt voucher type</span>
+                  <input
+                    type="text"
+                    placeholder={DEFAULT_LEDGER_NAMES.altVoucherType}
+                    value={ledgerNames.altVoucherType}
+                    onChange={(e) => setLedgerNames((v) => ({ ...v, altVoucherType: e.target.value }))}
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
         <p className="sub" style={{ marginTop: "-1.4rem", marginBottom: "2rem" }}>
-          Upload the Detailed Bill Register export from Teja. This produces a
-          ready-to-import RECEIPT mapping sheet, plus a separate review sheet
-          for any duplicate bill numbers that would fail on upload into Tally.
+          Upload the Detailed Bill Register export from Teja. This produces
+          Tally-ready RECEIPT, PAYMENT, and CREDIT NOTE sheets, plus a review
+          sheet for any duplicate bill numbers that would fail on upload.
         </p>
 
         <div className="card">
@@ -893,17 +1150,20 @@ export default function TejaReceiptMapper() {
               <StatRow label="Bills with a bill number" value={stats.candidateBills.toLocaleString()} />
               <StatRow label="Skipped — no cash/card/NEFT movement" value={stats.skippedZero.toLocaleString()} />
               <StatRow label="Receipt vouchers generated" value={stats.receiptCount.toLocaleString()} />
-              <StatRow label="Payment vouchers (negative cash / refunds)" value={stats.paymentCount.toLocaleString()} />
-              <StatRow label="Total output rows (RECEIPT sheet)" value={stats.outputRows.toLocaleString()} />
+              <StatRow label="Payment vouchers (cash refunds)" value={stats.paymentCount.toLocaleString()} />
+              <StatRow label="Credit Note vouchers (income reversals)" value={stats.creditNoteCount.toLocaleString()} />
+              <StatRow label="Total output rows (all sheets)" value={stats.outputRows.toLocaleString()} />
 
               {stats.duplicateBillNos > 0 && (
-                <div className="stamp-wrap">
-                  <span className="stamp">Needs Review</span>
-                  <span className="stamp-text">
+                <div className="stamp-wrap resolved">
+                  <span className="stamp resolved">Auto-resolved</span>
+                  <span className="stamp-text resolved">
                     {stats.duplicateBillNos} bill number{stats.duplicateBillNos === 1 ? "" : "s"} appear
                     {stats.duplicateBillNos === 1 ? "s" : ""} more than once across this export
-                    ({stats.duplicateRowCount} rows total). These were excluded from the RECEIPT
-                    sheet and listed on the "NEEDS REVIEW" tab — resolve manually before uploading.
+                    ({stats.duplicateRowCount} rows total). Repeat occurrences were kept in the
+                    voucher sheets but given an alternate Voucher Type (e.g. "
+                    {ledgerNames.altVoucherType || DEFAULT_LEDGER_NAMES.altVoucherType}") so the
+                    Voucher No. no longer collides. See the "DUPLICATE LOG" tab for the full list.
                   </span>
                 </div>
               )}
@@ -914,7 +1174,7 @@ export default function TejaReceiptMapper() {
                 checked={showPreview}
                 onChange={setShowPreview}
                 label="Preview output rows"
-                description="See the first 12 rows before downloading"
+                description="Sample rows from Receipt, Payment, and Credit Note before downloading"
               />
 
               {showPreview && (
@@ -948,7 +1208,7 @@ export default function TejaReceiptMapper() {
                     </table>
                   </div>
                   <p className="preview-note">
-                    Showing 12 of {stats.outputRows.toLocaleString()} rows
+                    Showing a sample across Receipt, Payment, and Credit Note ({stats.outputRows.toLocaleString()} rows total in the download)
                   </p>
                 </>
               )}
@@ -1030,9 +1290,12 @@ export default function TejaReceiptMapper() {
 
         <p className="footnote">
           Rules applied — Receipt: unique bill no., cash/card/NEFT &gt; 0 → Party
-          credited, mode(s) debited. Payment: negative cash → party debited, cash
-          credited. Negative IP Credit rows are excluded here (handled on the
-          SALES side). Duplicate bill numbers are excluded and listed separately.
+          credited, mode(s) debited. Payment: negative cash → party debited,
+          cash ledger credited. Credit Note: negative cash and/or negative IP
+          Credit → Bill Name debited, party credited (income reversal — a
+          negative cash row produces both a Payment and a Credit Note).
+          Duplicate bill numbers: the repeat occurrence is posted under an
+          alternate Voucher Type (set via Workings) instead of being dropped.
         </p>
       </div>
     </div>

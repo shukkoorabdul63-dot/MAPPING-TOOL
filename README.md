@@ -44,18 +44,38 @@ This creates a `dist/` folder with static files you can host anywhere
   - Only source rows with a Bill Number are processed.
   - Normal bill (unique Bill No, cash/card/neft > 0): Party credited,
     payment mode(s) debited. Voucher Type = "Receipt".
-  - Negative Cash (sales return): Party debited, Cash credited.
-    Voucher Type = "Payment".
-  - Negative IP Credit alone: excluded here — will be handled as a
-    SALES-side credit note once that mapping is built.
-  - Duplicate Bill Numbers across the export: excluded from the main
-    output and listed on the "NEEDS REVIEW" sheet.
-- Downloaded workbook has three sheets: RECEIPT (Tally-ready), NEEDS
-  REVIEW (duplicate bill numbers to fix manually), and SUMMARY BY BILL
-  TYPE (Cash/Card/NEFT totals per Teja bill section — e.g. REGISTRATION,
-  PHARMACY CASH BILL, ADVANCE, DISCHARGE BILL — for reconciling against
-  Teja's own report before you trust the output).
-- In-app preview toggle shows the first 12 output rows before download.
+  - Negative Cash (sales return, cash refunded): produces **two**
+    vouchers — a Payment (Party debited, Cash ledger credited) and a
+    Credit Note (Bill Name debited, Party credited — reverses the income).
+  - Negative IP Credit alone (no cash movement, just a billing
+    revision): produces a Credit Note only (Bill Name debited, Party
+    credited).
+  - Duplicate Bill Numbers across the export: no longer excluded. The
+    repeat occurrence is kept in the normal voucher sheets, but posted
+    under an alternate Voucher Type (default "Receipt 2", editable via
+    Workings) so the Voucher Type + Voucher No. combination Tally sees
+    is unique. A third+ occurrence (rare) auto-numbers further
+    ("Payment 3", "Credit Note 3", etc.). Logged on the "DUPLICATE LOG"
+    sheet for visibility, not action.
+- Downloaded workbook has six sheets:
+  - **RECEIPT** — normal receipts, Tally-ready
+  - **PAYMENT** — cash refunds
+  - **CREDIT NOTE** — income reversals (Bill Name Dr / Party Cr)
+  - **DUPLICATE LOG** — informational list of repeat bill numbers and
+    how they were resolved
+  - **SUMMARY BY BILL TYPE** — Cash/Card/NEFT totals per Teja bill
+    section (REGISTRATION, PHARMACY CASH BILL, ADVANCE, etc.), for
+    reconciling against Teja's own report
+  - **LEDGERS USED** — records which actual Tally ledger name was used
+    for Cash/Card/NEFT in this export
+- **Workings button** (top right) opens a panel to set the actual Tally
+  ledger name used for each payment mode — e.g. Card might post to
+  "Swipe Control", NEFT might post to "Google Pay Account" instead of
+  the generic mode name — and the alternate Voucher Type name used for
+  duplicate bill numbers. Applies across the RECEIPT and PAYMENT sheets
+  and the on-screen preview without needing to reprocess the file.
+- In-app preview toggle shows a sample of rows from all three voucher
+  sheets before download.
 - SALES sheet (billing details) mapping is not yet built — pending the
   Teja billing-details export.
 
