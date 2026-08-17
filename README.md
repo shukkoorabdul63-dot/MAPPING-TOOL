@@ -1,9 +1,8 @@
-# Teja → Tally Receipt Mapper
+# Teja → Tally Mapping Tool
 
-Converts a Teja "Detailed Bill Register" export into a Tally-uploadable
-RECEIPT mapping sheet, and flags duplicate bill numbers separately for
-manual review. Runs entirely in the browser — nothing is uploaded to a
-server, so patient billing data never leaves your machine.
+Turns Teja hospital-software exports (receipts and bills) into
+Tally-ready mapping workbooks. Everything runs in the browser — patient
+billing data never leaves your machine.
 
 ## Run it locally
 
@@ -20,68 +19,88 @@ Open the URL it prints (usually http://localhost:5173).
 npm run build
 ```
 
-This creates a `dist/` folder with static files you can host anywhere
-(Vercel, Netlify, GitHub Pages, or just open `dist/index.html` directly).
+Creates a `dist/` folder you can host anywhere (Vercel, Netlify, GitHub
+Pages, or just open `dist/index.html` directly).
 
-## Deploy to GitHub + Vercel (same pattern as Finova)
+## Deploy to GitHub + Vercel
 
-1. Create a new GitHub repo and push this project:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
-   git remote add origin https://github.com/<your-username>/teja-receipt-mapper.git
-   git push -u origin main
-   ```
-2. Go to [vercel.com](https://vercel.com), import the repo, and deploy —
-   Vercel auto-detects the Vite config, no settings needed.
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/<your-username>/teja-mapping-tool.git
+git push -u origin main
+```
 
-## Current scope
+Then import the repo on [vercel.com](https://vercel.com) — auto-detects
+Vite.
 
-- Handles the RECEIPT sheet only (Cash / Card / NEFT).
-- Rules implemented:
-  - Only source rows with a Bill Number are processed.
-  - Normal bill (unique Bill No, cash/card/neft > 0): Party credited,
-    payment mode(s) debited. Voucher Type = "Receipt".
-  - Negative Cash (sales return, cash refunded): produces **two**
-    vouchers — a Payment (Party debited, Cash ledger credited) and a
-    Credit Note (Bill Name debited, Party credited — reverses the income).
-  - Negative IP Credit alone (no cash movement, just a billing
-    revision): produces a Credit Note only (Bill Name debited, Party
-    credited).
-  - Duplicate Bill Numbers across the export: no longer excluded. The
-    repeat occurrence is kept in the normal voucher sheets, but posted
-    under an alternate Voucher Type (default "Receipt 2", editable via
-    Workings) so the Voucher Type + Voucher No. combination Tally sees
-    is unique. A third+ occurrence (rare) auto-numbers further
-    ("Payment 3", "Credit Note 3", etc.). Logged on the "DUPLICATE LOG"
-    sheet for visibility, not action.
-- Downloaded workbook has six sheets:
-  - **RECEIPT** — normal receipts, Tally-ready
-  - **PAYMENT** — cash refunds
-  - **CREDIT NOTE** — income reversals (Bill Name Dr / Party Cr)
-  - **DUPLICATE LOG** — informational list of repeat bill numbers and
-    how they were resolved
-  - **SUMMARY BY BILL TYPE** — Cash/Card/NEFT totals per Teja bill
-    section (REGISTRATION, PHARMACY CASH BILL, ADVANCE, etc.), for
-    reconciling against Teja's own report
-  - **LEDGERS USED** — records which actual Tally ledger name was used
-    for Cash/Card/NEFT in this export
-- **Workings button** (top right) opens a panel to set the actual Tally
-  ledger name used for each payment mode — e.g. Card might post to
-  "Swipe Control", NEFT might post to "Google Pay Account" instead of
-  the generic mode name — and the alternate Voucher Type name used for
-  duplicate bill numbers. Applies across the RECEIPT and PAYMENT sheets
-  and the on-screen preview without needing to reprocess the file.
-- In-app preview toggle shows a sample of rows from all three voucher
-  sheets before download.
-- SALES sheet (billing details) mapping is not yet built — pending the
-  Teja billing-details export.
+## Sections
+
+The app has a left sidebar with two sections plus Workings settings.
+
+### Receipts — Detailed Bill Register
+Upload the Detailed Bill Register export from Teja (`.xlsx` or `.xls`).
+Downloaded workbook has six sheets:
+
+- **RECEIPT** — normal receipts (Party Cr / Cash-Card-NEFT Dr)
+- **PAYMENT** — cash refunds (Party Dr / Cash Cr)
+- **CREDIT NOTE** — income reversals (Bill Name Dr / Party Cr)
+- **DUPLICATE LOG** — repeat bill numbers and how they were resolved
+- **SUMMARY BY BILL TYPE** — Cash/Card/NEFT totals per section
+- **LEDGERS USED** — records which Tally ledger names were applied
+
+Duplicate bill numbers are auto-resolved by posting the repeat
+occurrence under an alternate Voucher Type (set in Workings, default
+"Receipt 2") so uploads don't fail on duplicate voucher-no.
+
+### Bills — Bill analysis
+Upload the bill analysis export from Teja. Cancelled bills
+(`BILLCANCELLED = Y`) are removed. Rows sharing both Bill No. and
+Bill Name are treated as clear duplicates and the whole group is
+removed (logged separately). Remaining bills split three ways:
+
+- **Others (SALES journal)** — everything except Discharge and
+  Pharmacy. Fully mapped:
+  - DR: Party (`OPNUMBER - PATIENT NAME`), amount =
+    BillAmount + BillAdvance − IPCreditReturn
+  - CR: Income Head (`{BillName} INCOME-{IPOP}`),
+    amount = GrossAmount, Cost Center = DoctorCode
+  - Extra DR line: Discount, when BillDiscount > 0
+- **Discharge (raw)** — kept as a raw sheet, rules pending
+- **Pharmacy (raw)** — combined IP + OP pharmacy, rules pending
+
+### Workings (sidebar link)
+Opens a slide-over panel to set the actual Tally ledger names for Cash,
+Card, and NEFT (e.g. Card might post to "Swipe Control", NEFT to a
+"Google Pay Account" ledger), plus the alternate Voucher Type used for
+duplicate bill numbers. Applies across the mapped workbook and the
+on-screen preview without reprocessing the source file.
 
 ## Tech
 
 React + Vite, [SheetJS (xlsx)](https://sheetjs.com/) for parsing and
-generating Excel files client-side. Tested against a real 5,000-row
-export without lag; designed to comfortably handle 50,000+ rows since
-all processing is a single in-memory pass.
+generating Excel files client-side. Handles both `.xlsx` and legacy
+`.xls`. Comfortably handles 50,000+ rows since processing is a single
+in-memory pass.
+
+## Project structure
+
+```
+src/
+├── App.jsx                     # shell (sidebar + main + drawer)
+├── main.jsx                    # entry
+├── styles.css                  # all styles
+├── components/
+│   ├── Sidebar.jsx
+│   ├── ReceiptsView.jsx
+│   ├── BillsView.jsx
+│   ├── WorkingsPanel.jsx
+│   └── shared.jsx              # Toggle, Button, StatRow, Dropzone
+└── lib/
+    ├── utils.js                # numbers, dates, header parsing
+    ├── tokens.js               # ledger tokens + voucher-type helpers
+    ├── receipts.js             # Detailed Bill Register logic
+    └── bills.js                # Bill analysis logic
+```
