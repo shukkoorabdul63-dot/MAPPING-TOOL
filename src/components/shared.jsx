@@ -38,6 +38,22 @@ export function Button({ variant = "primary", size = "md", children, ...rest }) 
   );
 }
 
+export function EmptyStateIcon({ done }) {
+  return (
+    <span className="empty-icon">
+      {done ? (
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M4 12l5 5L19 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      )}
+    </span>
+  );
+}
+
 export function StatusRow({ status, labels }) {
   if (status === "idle") return null;
   return (
