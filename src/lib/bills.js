@@ -4,11 +4,15 @@ import {
   OTHERS_TOKEN,
   PHARMACY_TOKEN,
   DISCHARGE_TOKEN,
-  OTHERS_ALT_TOKEN,
-  PHARMACY_ALT_TOKEN,
-  DISCHARGE_ALT_TOKEN,
+  DISCOUNT_OTHERS_TOKEN,
+  DISCOUNT_PHARMACY_TOKEN,
+  DISCOUNT_DISCHARGE_TOKEN,
+  CGST_TOKEN,
+  SGST_TOKEN,
   resolveRows,
-  voucherTypeForOccurrence,
+  nextOccurrence,
+  pushToBucket,
+  bucketSheetName,
 } from "./tokens.js";
 
 export const SALES_HEADERS = [
@@ -194,18 +198,22 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
     clean.push(c);
   }
 
-  // Step 3: categorize + map to SALES rows per sheet, tracking per-sheet
-  // per-billNo occurrence so we can auto-resolve duplicate voucher numbers
-  // that fall inside the same sheet.
+  // Step 3: categorize + map to SALES rows per sheet. Occurrence is tracked
+  // per output category (Others / Pharmacy / Discharge) and per bill no.
+  // within that category — a repeat bill no. is routed to an additional
+  // numbered sheet rather than a renamed voucher type.
   const salesOthersRows = [];
   const salesPharmacyRows = [];
   const salesDischargeRows = [];
+  const othersBuckets = [];
+  const pharmacyBuckets = [];
+  const dischargeBuckets = [];
   const grossByBillName = new Map();
   const dischargeReviewRows = []; // negative income cases
 
-  const othersOccurrence = new Map();
-  const pharmacyOccurrence = new Map();
-  const dischargeOccurrence = new Map();
+  const othersSeen = new Map();
+  const pharmacySeen = new Map();
+  const dischargeSeen = new Map();
 
   let pharmacyTaxable = 0;
   let pharmacyExempt = 0;
@@ -239,7 +247,6 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
       const income = c.grossAmount - ipCredit;
       const drParty = income - c.billDiscount;
 
-      // Flag negative income (over-refund / stale IP credit) for the user
       if (income < -0.01) {
         dischargeReviewRows.push([
           ...rawRow(c),
@@ -247,23 +254,23 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
         ]);
       }
 
-      const occ = (dischargeOccurrence.get(c.billNo) || 0) + 1;
-      dischargeOccurrence.set(c.billNo, occ);
-      const vt = voucherTypeForOccurrence(DISCHARGE_TOKEN, occ, DISCHARGE_ALT_TOKEN);
-
-      salesDischargeRows.push([vt, c.date, c.billNo, party, drParty, "DR", null, null]);
+      const rows = [
+        [DISCHARGE_TOKEN, c.date, c.billNo, party, drParty, "DR", null, null],
+      ];
       if (c.billDiscount > 0) {
-        salesDischargeRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+        rows.push([DISCHARGE_TOKEN, c.date, c.billNo, DISCOUNT_DISCHARGE_TOKEN, c.billDiscount, "DR", null, null]);
       }
-      salesDischargeRows.push([vt, c.date, c.billNo, incomeHead, income, "CR", null, c.doctorCode]);
+      rows.push([DISCHARGE_TOKEN, c.date, c.billNo, incomeHead, income, "CR", null, c.doctorCode]);
+
+      salesDischargeRows.push(...rows);
+      const occIdx = nextOccurrence(dischargeSeen, c.billNo);
+      pushToBucket(dischargeBuckets, occIdx, rows);
       continue;
     }
 
     if (PHARMACY_NAMES.has(nameLower)) {
       const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
-      const occ = (pharmacyOccurrence.get(c.billNo) || 0) + 1;
-      pharmacyOccurrence.set(c.billNo, occ);
-      const vt = voucherTypeForOccurrence(PHARMACY_TOKEN, occ, PHARMACY_ALT_TOKEN);
+      const rows = [];
 
       if (c.vatAmount > 0) {
         pharmacyTaxable++;
@@ -273,35 +280,41 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
         totalCgst += cgst;
         totalSgst += sgst;
 
-        salesPharmacyRows.push([vt, c.date, c.billNo, party, drAmount, "DR", null, null]);
+        rows.push([PHARMACY_TOKEN, c.date, c.billNo, party, drAmount, "DR", null, null]);
         if (c.billDiscount > 0) {
-          salesPharmacyRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+          rows.push([PHARMACY_TOKEN, c.date, c.billNo, DISCOUNT_PHARMACY_TOKEN, c.billDiscount, "DR", null, null]);
         }
-        salesPharmacyRows.push([vt, c.date, c.billNo, incomeHead, taxableValue, "CR", null, c.doctorCode]);
-        salesPharmacyRows.push([vt, c.date, c.billNo, "CGST", cgst, "CR", null, null]);
-        salesPharmacyRows.push([vt, c.date, c.billNo, "SGST", sgst, "CR", null, null]);
+        rows.push([PHARMACY_TOKEN, c.date, c.billNo, incomeHead, taxableValue, "CR", null, c.doctorCode]);
+        rows.push([PHARMACY_TOKEN, c.date, c.billNo, CGST_TOKEN, cgst, "CR", null, null]);
+        rows.push([PHARMACY_TOKEN, c.date, c.billNo, SGST_TOKEN, sgst, "CR", null, null]);
       } else {
         pharmacyExempt++;
-        salesPharmacyRows.push([vt, c.date, c.billNo, party, drAmount, "DR", null, null]);
+        rows.push([PHARMACY_TOKEN, c.date, c.billNo, party, drAmount, "DR", null, null]);
         if (c.billDiscount > 0) {
-          salesPharmacyRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+          rows.push([PHARMACY_TOKEN, c.date, c.billNo, DISCOUNT_PHARMACY_TOKEN, c.billDiscount, "DR", null, null]);
         }
-        salesPharmacyRows.push([vt, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
+        rows.push([PHARMACY_TOKEN, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
       }
+
+      salesPharmacyRows.push(...rows);
+      const occIdx = nextOccurrence(pharmacySeen, c.billNo);
+      pushToBucket(pharmacyBuckets, occIdx, rows);
       continue;
     }
 
     // Others
     const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
-    const occ = (othersOccurrence.get(c.billNo) || 0) + 1;
-    othersOccurrence.set(c.billNo, occ);
-    const vt = voucherTypeForOccurrence(OTHERS_TOKEN, occ, OTHERS_ALT_TOKEN);
-
-    salesOthersRows.push([vt, c.date, c.billNo, party, drAmount, "DR", null, null]);
-    salesOthersRows.push([vt, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
+    const rows = [
+      [OTHERS_TOKEN, c.date, c.billNo, party, drAmount, "DR", null, null],
+      [OTHERS_TOKEN, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode],
+    ];
     if (c.billDiscount > 0) {
-      salesOthersRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+      rows.push([OTHERS_TOKEN, c.date, c.billNo, DISCOUNT_OTHERS_TOKEN, c.billDiscount, "DR", null, null]);
     }
+
+    salesOthersRows.push(...rows);
+    const occIdx = nextOccurrence(othersSeen, c.billNo);
+    pushToBucket(othersBuckets, occIdx, rows);
   }
 
   const billGrossByName = [...grossByBillName.values()].sort((a, b) => b.grossAmount - a.grossAmount);
@@ -310,6 +323,9 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
     salesOthersRows,
     salesPharmacyRows,
     salesDischargeRows,
+    othersBuckets,
+    pharmacyBuckets,
+    dischargeBuckets,
     duplicateLogRows,
     dischargeReviewRows,
     billGrossByName,
@@ -321,9 +337,12 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
       duplicateGroupCount,
       duplicateRowCount,
       cleanRows: clean.length,
-      othersCount: [...othersOccurrence.values()].reduce((a, b) => a + b, 0),
-      pharmacyCount: [...pharmacyOccurrence.values()].reduce((a, b) => a + b, 0),
-      dischargeCount: [...dischargeOccurrence.values()].reduce((a, b) => a + b, 0),
+      othersCount: othersSeen.size ? [...othersSeen.values()].reduce((a, b) => a + b, 0) : 0,
+      pharmacyCount: pharmacySeen.size ? [...pharmacySeen.values()].reduce((a, b) => a + b, 0) : 0,
+      dischargeCount: dischargeSeen.size ? [...dischargeSeen.values()].reduce((a, b) => a + b, 0) : 0,
+      othersSheetCount: othersBuckets.length,
+      pharmacySheetCount: pharmacyBuckets.length,
+      dischargeSheetCount: dischargeBuckets.length,
       pharmacyTaxable,
       pharmacyExempt,
       totalCgst,
@@ -341,9 +360,9 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
 
 export function buildBillsOutputWorkbook(result, ledgerNames) {
   const {
-    salesOthersRows,
-    salesPharmacyRows,
-    salesDischargeRows,
+    othersBuckets,
+    pharmacyBuckets,
+    dischargeBuckets,
     duplicateLogRows,
     dischargeReviewRows,
   } = result;
@@ -360,16 +379,19 @@ export function buildBillsOutputWorkbook(result, ledgerNames) {
     { wch: 12 },
   ];
 
-  const addSalesSheet = (rows, name) => {
-    const resolved = resolveRows(rows, ledgerNames);
-    const ws = XLSX.utils.aoa_to_sheet([SALES_HEADERS, ...resolved]);
-    ws["!cols"] = salesCols;
-    XLSX.utils.book_append_sheet(wb, ws, name);
+  const addBucketedSheets = (buckets, baseName) => {
+    buckets.forEach((rows, i) => {
+      if (!rows || rows.length === 0) return;
+      const resolved = resolveRows(rows, ledgerNames);
+      const ws = XLSX.utils.aoa_to_sheet([SALES_HEADERS, ...resolved]);
+      ws["!cols"] = salesCols;
+      XLSX.utils.book_append_sheet(wb, ws, bucketSheetName(baseName, i + 1));
+    });
   };
 
-  addSalesSheet(salesOthersRows, "SALES - OTHERS");
-  addSalesSheet(salesPharmacyRows, "SALES - PHARMACY");
-  addSalesSheet(salesDischargeRows, "SALES - DISCHARGE");
+  addBucketedSheets(othersBuckets, "SALES - OTHERS");
+  addBucketedSheets(pharmacyBuckets, "SALES - PHARMACY");
+  addBucketedSheets(dischargeBuckets, "SALES - DISCHARGE");
 
   const rawCols = BILL_NEEDED_HEADERS.map((h) =>
     h === "PATIENTNAME" ? { wch: 26 } : h === "BILLNAME" ? { wch: 22 } : { wch: 14 }

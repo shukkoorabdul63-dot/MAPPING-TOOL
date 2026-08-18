@@ -2,9 +2,14 @@ import * as XLSX from "xlsx";
 import { toNumber, normHeader, excelSerialToDDMMYYYY } from "./utils.js";
 import {
   LEDGER_TOKEN,
+  RECEIPT_TOKEN,
+  PAYMENT_TOKEN,
+  CREDITNOTE_TOKEN,
   DEFAULT_LEDGER_NAMES,
   resolveRows,
-  voucherTypeForOccurrence,
+  nextOccurrence,
+  pushToBucket,
+  bucketSheetName,
 } from "./tokens.js";
 
 export const RECEIPT_HEADERS = [
@@ -152,14 +157,18 @@ function processWorkbook(workbook) {
     .map((e) => ({ ...e, total: e.cash + e.card + e.neft }))
     .sort((a, b) => b.total - a.total);
 
-  // Pass 2: find duplicate bill numbers, and track each row's occurrence
-  // index within its bill-number group (in file order) so duplicates can
-  // be auto-resolved with an alternate Voucher Type instead of excluded.
-  const countByBillNo = new Map();
-  for (const c of candidates) {
-    countByBillNo.set(c.billNo, (countByBillNo.get(c.billNo) || 0) + 1);
-  }
-  const seenSoFar = new Map();
+  // Pass 2: build vouchers. Occurrence is tracked SEPARATELY for each output
+  // type (Receipt / Payment / Credit Note) — a bill number that produces a
+  // Payment does not consume an occurrence slot that a later Receipt for the
+  // same bill number would need, and vice versa. Each type's duplicates are
+  // bucketed into their own additional sheet rather than a renamed voucher
+  // type, so the base Voucher Type name never changes.
+  const receiptSeen = new Map();
+  const paymentSeen = new Map();
+  const creditNoteSeen = new Map();
+  const receiptBuckets = [];
+  const paymentBuckets = [];
+  const creditNoteBuckets = [];
 
   const receiptRows = [];
   const paymentRows = [];
@@ -169,14 +178,8 @@ function processWorkbook(workbook) {
   let paymentCount = 0;
   let receiptCount = 0;
   let creditNoteCount = 0;
-  let duplicateRowCount = 0;
 
   for (const c of candidates) {
-    const totalForBillNo = countByBillNo.get(c.billNo);
-    const occurrenceIndex = (seenSoFar.get(c.billNo) || 0) + 1;
-    seenSoFar.set(c.billNo, occurrenceIndex);
-    const isDuplicate = totalForBillNo > 1;
-
     const party = `${c.patientId} - ${c.patientName}`;
     const negativeCashAmount = c.cash < 0 ? Math.abs(c.cash) : 0;
     const negativeIpCreditAmount = c.ipCredit < 0 ? Math.abs(c.ipCredit) : 0;
@@ -185,161 +188,113 @@ function processWorkbook(workbook) {
     const receiptNeft = c.neft > 0 ? c.neft : 0;
     const receiptTotal = receiptCash + receiptCard + receiptNeft;
 
-    if (
-      negativeCashAmount === 0 &&
-      negativeIpCreditAmount === 0 &&
-      receiptTotal === 0
-    ) {
+    if (negativeCashAmount === 0 && negativeIpCreditAmount === 0 && receiptTotal === 0) {
       skippedZero++;
       continue;
     }
 
-    if (isDuplicate) {
-      duplicateRowCount++;
-      reviewRows.push([
-        c.billNo,
-        c.date,
-        c.patientId,
-        c.patientName,
-        c.cash,
-        c.card,
-        c.neft,
-        c.ipCredit,
-        `Duplicate #${occurrenceIndex} of ${totalForBillNo} — auto-resolved with an alternate voucher type, see voucher sheets`,
-      ]);
-    }
-
     // Negative Cash: two things happen —
-    //   1) the income for this bill is reversed (Credit Note): Bill Name Dr, Party Cr
-    //   2) the cash itself is refunded (Payment): Party Dr, Cash ledger Cr
+    //   1) the cash itself is refunded (Payment): Cash ledger Cr, Party Dr
+    //   2) the income for this bill is reversed (Credit Note): Party Cr, Bill Name Dr
     if (negativeCashAmount > 0) {
       paymentCount++;
-      const vType = voucherTypeForOccurrence("Payment", occurrenceIndex);
-      paymentRows.push([vType, c.date, c.billNo, party, negativeCashAmount, "DR", null, null, null, null, null]);
-      paymentRows.push([
-        vType,
-        c.date,
-        c.billNo,
-        LEDGER_TOKEN.CASH,
-        negativeCashAmount,
-        "CR",
-        null,
-        null,
-        null,
-        null,
-        null,
-      ]);
+      const occIdx = nextOccurrence(paymentSeen, c.billNo);
+      const rows = [
+        [PAYMENT_TOKEN, c.date, c.billNo, LEDGER_TOKEN.CASH, negativeCashAmount, "CR", null, null, null, null, null],
+        [PAYMENT_TOKEN, c.date, c.billNo, party, negativeCashAmount, "DR", null, null, null, null, null],
+      ];
+      paymentRows.push(...rows);
+      pushToBucket(paymentBuckets, occIdx, rows);
+      if (occIdx > 1) {
+        reviewRows.push([
+          c.billNo,
+          c.date,
+          c.patientId,
+          c.patientName,
+          c.cash,
+          c.card,
+          c.neft,
+          c.ipCredit,
+          `Repeat Payment #${occIdx} for this bill no. — routed to sheet "${bucketSheetName("PAYMENT", occIdx)}"`,
+        ]);
+      }
 
       creditNoteCount++;
-      const cnType = voucherTypeForOccurrence("Credit Note", occurrenceIndex);
-      creditNoteRows.push([
-        cnType,
-        c.date,
-        c.billNo,
-        c.billName,
-        negativeCashAmount,
-        "DR",
-        null,
-        null,
-        null,
-        null,
-        null,
-      ]);
-      creditNoteRows.push([
-        cnType,
-        c.date,
-        c.billNo,
-        party,
-        negativeCashAmount,
-        "CR",
-        null,
-        null,
-        null,
-        null,
-        null,
-      ]);
+      const cnOccIdx = nextOccurrence(creditNoteSeen, c.billNo);
+      const cnRows = [
+        [CREDITNOTE_TOKEN, c.date, c.billNo, party, negativeCashAmount, "CR", null, null, null, null, null],
+        [CREDITNOTE_TOKEN, c.date, c.billNo, c.billName, negativeCashAmount, "DR", null, null, null, null, null],
+      ];
+      creditNoteRows.push(...cnRows);
+      pushToBucket(creditNoteBuckets, cnOccIdx, cnRows);
+      if (cnOccIdx > 1) {
+        reviewRows.push([
+          c.billNo,
+          c.date,
+          c.patientId,
+          c.patientName,
+          c.cash,
+          c.card,
+          c.neft,
+          c.ipCredit,
+          `Repeat Credit Note #${cnOccIdx} for this bill no. — routed to sheet "${bucketSheetName("CREDIT NOTE", cnOccIdx)}"`,
+        ]);
+      }
     }
 
     // Negative IP Credit alone: a billing/credit revision with no cash
     // movement — still an income reversal, so it also gets a Credit Note.
     if (negativeIpCreditAmount > 0) {
       creditNoteCount++;
-      const cnType = voucherTypeForOccurrence("Credit Note", occurrenceIndex);
-      creditNoteRows.push([
-        cnType,
-        c.date,
-        c.billNo,
-        c.billName,
-        negativeIpCreditAmount,
-        "DR",
-        null,
-        null,
-        null,
-        null,
-        null,
-      ]);
-      creditNoteRows.push([
-        cnType,
-        c.date,
-        c.billNo,
-        party,
-        negativeIpCreditAmount,
-        "CR",
-        null,
-        null,
-        null,
-        null,
-        null,
-      ]);
+      const cnOccIdx = nextOccurrence(creditNoteSeen, c.billNo);
+      const cnRows = [
+        [CREDITNOTE_TOKEN, c.date, c.billNo, party, negativeIpCreditAmount, "CR", null, null, null, null, null],
+        [CREDITNOTE_TOKEN, c.date, c.billNo, c.billName, negativeIpCreditAmount, "DR", null, null, null, null, null],
+      ];
+      creditNoteRows.push(...cnRows);
+      pushToBucket(creditNoteBuckets, cnOccIdx, cnRows);
+      if (cnOccIdx > 1) {
+        reviewRows.push([
+          c.billNo,
+          c.date,
+          c.patientId,
+          c.patientName,
+          c.cash,
+          c.card,
+          c.neft,
+          c.ipCredit,
+          `Repeat Credit Note #${cnOccIdx} for this bill no. — routed to sheet "${bucketSheetName("CREDIT NOTE", cnOccIdx)}"`,
+        ]);
+      }
     }
 
     if (receiptTotal > 0) {
       receiptCount++;
-      const rType = voucherTypeForOccurrence("Receipt", occurrenceIndex);
-      receiptRows.push([rType, c.date, c.billNo, party, receiptTotal, "CR", null, null, null, null, null]);
+      const occIdx = nextOccurrence(receiptSeen, c.billNo);
+      const rows = [];
       if (receiptCash > 0) {
-        receiptRows.push([
-          rType,
-          c.date,
-          c.billNo,
-          LEDGER_TOKEN.CASH,
-          receiptCash,
-          "DR",
-          null,
-          null,
-          null,
-          null,
-          null,
-        ]);
+        rows.push([RECEIPT_TOKEN, c.date, c.billNo, LEDGER_TOKEN.CASH, receiptCash, "DR", null, null, null, null, null]);
       }
       if (receiptCard > 0) {
-        receiptRows.push([
-          rType,
-          c.date,
-          c.billNo,
-          LEDGER_TOKEN.CARD,
-          receiptCard,
-          "DR",
-          null,
-          null,
-          null,
-          null,
-          null,
-        ]);
+        rows.push([RECEIPT_TOKEN, c.date, c.billNo, LEDGER_TOKEN.CARD, receiptCard, "DR", null, null, null, null, null]);
       }
       if (receiptNeft > 0) {
-        receiptRows.push([
-          rType,
-          c.date,
+        rows.push([RECEIPT_TOKEN, c.date, c.billNo, LEDGER_TOKEN.NEFT, receiptNeft, "DR", null, null, null, null, null]);
+      }
+      rows.push([RECEIPT_TOKEN, c.date, c.billNo, party, receiptTotal, "CR", null, null, null, null, null]);
+      receiptRows.push(...rows);
+      pushToBucket(receiptBuckets, occIdx, rows);
+      if (occIdx > 1) {
+        reviewRows.push([
           c.billNo,
-          LEDGER_TOKEN.NEFT,
-          receiptNeft,
-          "DR",
-          null,
-          null,
-          null,
-          null,
-          null,
+          c.date,
+          c.patientId,
+          c.patientName,
+          c.cash,
+          c.card,
+          c.neft,
+          c.ipCredit,
+          `Repeat Receipt #${occIdx} for this bill no. — routed to sheet "${bucketSheetName("RECEIPT", occIdx)}"`,
         ]);
       }
     }
@@ -349,31 +304,29 @@ function processWorkbook(workbook) {
     receiptRows,
     paymentRows,
     creditNoteRows,
+    receiptBuckets,
+    paymentBuckets,
+    creditNoteBuckets,
     reviewRows,
     billNameSummary,
     stats: {
       scannedDataRows,
       candidateBills: candidates.length,
-      uniqueBills: candidates.length - duplicateRowCount,
-      duplicateRowCount,
-      duplicateBillNos: [...countByBillNo.values()].filter((v) => v > 1).length,
       skippedZero,
       paymentCount,
       receiptCount,
       creditNoteCount,
+      receiptSheetCount: receiptBuckets.length,
+      paymentSheetCount: paymentBuckets.length,
+      creditNoteSheetCount: creditNoteBuckets.length,
+      duplicateRowCount: reviewRows.length,
       outputRows: receiptRows.length + paymentRows.length + creditNoteRows.length,
     },
   };
 }
 
-function buildOutputWorkbook(
-  receiptRows,
-  paymentRows,
-  creditNoteRows,
-  reviewRows,
-  billNameSummary,
-  ledgerNames
-) {
+function buildOutputWorkbook(result, ledgerNames) {
+  const { receiptBuckets, paymentBuckets, creditNoteBuckets, reviewRows, billNameSummary } = result;
   const wb = XLSX.utils.book_new();
 
   const stdCols = [
@@ -390,17 +343,20 @@ function buildOutputWorkbook(
     { wch: 12 },
   ];
 
-  const addVoucherSheet = (rows, sheetName) => {
-    const resolved = resolveRows(rows, ledgerNames);
-    const aoa = [RECEIPT_HEADERS, ...resolved];
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = stdCols;
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const addBucketedSheets = (buckets, baseName) => {
+    buckets.forEach((rows, i) => {
+      if (!rows || rows.length === 0) return;
+      const resolved = resolveRows(rows, ledgerNames);
+      const aoa = [RECEIPT_HEADERS, ...resolved];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws["!cols"] = stdCols;
+      XLSX.utils.book_append_sheet(wb, ws, bucketSheetName(baseName, i + 1));
+    });
   };
 
-  addVoucherSheet(receiptRows, "RECEIPT");
-  addVoucherSheet(paymentRows, "PAYMENT");
-  addVoucherSheet(creditNoteRows, "CREDIT NOTE");
+  addBucketedSheets(receiptBuckets, "RECEIPT");
+  addBucketedSheets(paymentBuckets, "PAYMENT");
+  addBucketedSheets(creditNoteBuckets, "CREDIT NOTE");
 
   const reviewAoa = [REVIEW_HEADERS, ...reviewRows];
   const wsReview = XLSX.utils.aoa_to_sheet(reviewAoa);
@@ -413,7 +369,7 @@ function buildOutputWorkbook(
     { wch: 10 },
     { wch: 10 },
     { wch: 10 },
-    { wch: 34 },
+    { wch: 46 },
   ];
   XLSX.utils.book_append_sheet(wb, wsReview, "DUPLICATE LOG");
 
@@ -434,27 +390,22 @@ function buildOutputWorkbook(
       ["TOTAL", totals.cash, totals.card, totals.neft, totals.total, totals.count],
     ];
     const wsSummary = XLSX.utils.aoa_to_sheet(summaryAoa);
-    wsSummary["!cols"] = [
-      { wch: 28 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 12 },
-    ];
+    wsSummary["!cols"] = [{ wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, wsSummary, "SUMMARY BY BILL TYPE");
   }
 
   const ledgerAoa = [
-    ["Payment Mode", "Tally Ledger Name Used"],
-    ["Cash", ledgerNames.cash || DEFAULT_LEDGER_NAMES.cash],
-    ["Card", ledgerNames.card || DEFAULT_LEDGER_NAMES.card],
-    ["NEFT", ledgerNames.neft || DEFAULT_LEDGER_NAMES.neft],
+    ["Setting", "Value"],
+    ["Cash ledger", ledgerNames.cash || DEFAULT_LEDGER_NAMES.cash],
+    ["Card ledger", ledgerNames.card || DEFAULT_LEDGER_NAMES.card],
+    ["NEFT ledger", ledgerNames.neft || DEFAULT_LEDGER_NAMES.neft],
     [],
-    ["Duplicate bill numbers — alternate voucher type", ledgerNames.altVoucherType || DEFAULT_LEDGER_NAMES.altVoucherType],
+    ["Receipt voucher type", ledgerNames.receiptVoucher || DEFAULT_LEDGER_NAMES.receiptVoucher],
+    ["Payment voucher type", ledgerNames.paymentVoucher || DEFAULT_LEDGER_NAMES.paymentVoucher],
+    ["Credit Note voucher type", ledgerNames.creditNoteVoucher || DEFAULT_LEDGER_NAMES.creditNoteVoucher],
   ];
   const wsLedger = XLSX.utils.aoa_to_sheet(ledgerAoa);
-  wsLedger["!cols"] = [{ wch: 42 }, { wch: 28 }];
+  wsLedger["!cols"] = [{ wch: 30 }, { wch: 28 }];
   XLSX.utils.book_append_sheet(wb, wsLedger, "LEDGERS USED");
 
   return wb;

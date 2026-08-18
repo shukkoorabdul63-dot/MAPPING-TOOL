@@ -1,7 +1,7 @@
 import React, { useCallback } from "react";
 import * as XLSX from "xlsx";
 import { processWorkbook, buildOutputWorkbook } from "../lib/receipts.js";
-import { resolveRows, DEFAULT_LEDGER_NAMES } from "../lib/tokens.js";
+import { resolveRows } from "../lib/tokens.js";
 import { downloadWorkbook } from "../lib/utils.js";
 import { StatRow, Toggle, Button, StatusRow, Dropzone } from "./shared.jsx";
 
@@ -48,14 +48,7 @@ export function ReceiptsView({ ledgerNames, state, setState }) {
 
   const download = () => {
     if (!result) return;
-    const wb = buildOutputWorkbook(
-      result.receiptRows,
-      result.paymentRows,
-      result.creditNoteRows,
-      result.reviewRows,
-      result.billNameSummary,
-      ledgerNames
-    );
+    const wb = buildOutputWorkbook(result, ledgerNames);
     const base = (fileName || "teja_receipts").replace(/\.[^/.]+$/, "");
     downloadWorkbook(wb, `${base}_TALLY_MAPPED.xlsx`);
   };
@@ -102,20 +95,20 @@ export function ReceiptsView({ ledgerNames, state, setState }) {
             <StatRow label="Bill rows scanned" value={stats.scannedDataRows.toLocaleString()} />
             <StatRow label="Bills with a bill number" value={stats.candidateBills.toLocaleString()} />
             <StatRow label="Skipped — no cash/card/NEFT movement" value={stats.skippedZero.toLocaleString()} />
-            <StatRow label="Receipt vouchers" value={stats.receiptCount.toLocaleString()} />
-            <StatRow label="Payment vouchers (cash refunds)" value={stats.paymentCount.toLocaleString()} />
-            <StatRow label="Credit Note vouchers (income reversals)" value={stats.creditNoteCount.toLocaleString()} />
+            <StatRow label="Receipt vouchers" value={`${stats.receiptCount.toLocaleString()}${stats.receiptSheetCount > 1 ? ` — across ${stats.receiptSheetCount} sheets` : ""}`} />
+            <StatRow label="Payment vouchers (cash refunds)" value={`${stats.paymentCount.toLocaleString()}${stats.paymentSheetCount > 1 ? ` — across ${stats.paymentSheetCount} sheets` : ""}`} />
+            <StatRow label="Credit Note vouchers (income reversals)" value={`${stats.creditNoteCount.toLocaleString()}${stats.creditNoteSheetCount > 1 ? ` — across ${stats.creditNoteSheetCount} sheets` : ""}`} />
             <StatRow label="Total output rows" value={stats.outputRows.toLocaleString()} />
 
-            {stats.duplicateBillNos > 0 && (
+            {stats.duplicateRowCount > 0 && (
               <div className="note">
                 <span className="pill teal">Auto-resolved</span>
                 <p>
-                  {stats.duplicateBillNos} bill number{stats.duplicateBillNos === 1 ? "" : "s"} appear
-                  {stats.duplicateBillNos === 1 ? "s" : ""} more than once ({stats.duplicateRowCount} rows).
-                  The repeat occurrence posts under "
-                  {ledgerNames.altVoucherType || DEFAULT_LEDGER_NAMES.altVoucherType}" so voucher numbers
-                  never collide. Full list on the DUPLICATE LOG sheet.
+                  {stats.duplicateRowCount} voucher{stats.duplicateRowCount === 1 ? "" : "s"} share a bill
+                  number with an earlier voucher of the same type. Each repeat goes to its own extra
+                  sheet — "RECEIPT (2)", "PAYMENT (2)", "CREDIT NOTE (2)", and so on — so upload each
+                  sheet as a separate Tally import and voucher numbers never collide. Same Voucher Type
+                  throughout; only the sheet differs. Full list on the DUPLICATE LOG sheet.
                 </p>
               </div>
             )}

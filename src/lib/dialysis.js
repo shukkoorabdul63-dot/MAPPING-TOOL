@@ -1,11 +1,6 @@
 import * as XLSX from "xlsx";
 import { toNumber, excelSerialToDDMMYYYY } from "./utils.js";
-import {
-  DIALYSIS_TOKEN,
-  DIALYSIS_ALT_TOKEN,
-  resolveRows,
-  voucherTypeForOccurrence,
-} from "./tokens.js";
+import { DIALYSIS_TOKEN, resolveRows, nextOccurrence, pushToBucket, bucketSheetName } from "./tokens.js";
 
 // Uses the same 11-column layout as RECEIPT (Bill Type + Bill Name + Bill
 // Amount are populated so Tally tracks the receivable against a bill reference).
@@ -102,8 +97,9 @@ export function processDialysisWorkbook(workbook) {
   // Only the DIALYSIS section is receivable data — other sections in this
   // sample have all zeros in pending. Restrict to DIALYSIS.
   const salesRows = [];
+  const buckets = [];
   const reviewRows = [];
-  const companyOccurrence = new Map();
+  const billNoSeen = new Map();
   const companyTotals = new Map();
 
   let currentSection = "";
@@ -118,7 +114,6 @@ export function processDialysisWorkbook(workbook) {
     const c1 = row[1];
     if (typeof c1 !== "string" || c1.trim() === "") return false;
     if (String(c1).trim().toLowerCase().startsWith("total")) return false;
-    // Section header rows have text in col 1 and everything else blank
     const rest = row.filter((v, i) => i !== 1 && v != null && v !== "");
     return rest.length === 0;
   };
@@ -165,9 +160,6 @@ export function processDialysisWorkbook(workbook) {
     const employee = cEmployee !== -1 && row[cEmployee] != null ? String(row[cEmployee]).trim() : "";
     const billNoStr = String(billNoCell).trim();
 
-    // The date lives in a row *before* the first data row of a section
-    // (Teja renders the print date under the section title). Prefer any real
-    // date the row itself carries; else use the latest we've seen; else blank.
     const rowDate = excelSerialToDDMMYYYY(row[3]);
     const dateStr = rowDate || currentDate;
 
@@ -197,62 +189,31 @@ export function processDialysisWorkbook(workbook) {
     const partyCompany = `${company}-dialysis`;
     companyTotals.set(company, (companyTotals.get(company) || 0) + pending);
 
-    // Voucher type: auto-resolve if same bill no. repeats within the sheet
-    const occ = (companyOccurrence.get(billNoStr) || 0) + 1;
-    companyOccurrence.set(billNoStr, occ);
-    const vt = voucherTypeForOccurrence(DIALYSIS_TOKEN, occ, DIALYSIS_ALT_TOKEN);
-
     const narration = employee ? `Dialysis receivable — ${employee}` : "Dialysis receivable";
     // DR: company (receivable), CR: patient (settles patient's outstanding)
     // Bill Type "New Ref" with patient ledger as Bill Name lets Tally track
     // the pending balance against a named bill reference.
-    salesRows.push([
-      vt,
-      dateStr,
-      billNoStr,
-      partyCompany,
-      pending,
-      "DR",
-      "New Ref",
-      partyPatient,
-      pending,
-      narration,
-      null,
-    ]);
-    salesRows.push([
-      vt,
-      dateStr,
-      billNoStr,
-      partyPatient,
-      pending,
-      "CR",
-      "New Ref",
-      partyPatient,
-      pending,
-      narration,
-      null,
-    ]);
+    const voucherRows = [
+      [DIALYSIS_TOKEN, dateStr, billNoStr, partyCompany, pending, "DR", "New Ref", partyPatient, pending, narration, null],
+      [DIALYSIS_TOKEN, dateStr, billNoStr, partyPatient, pending, "CR", "New Ref", partyPatient, pending, narration, null],
+    ];
+    salesRows.push(...voucherRows);
+    const occIdx = nextOccurrence(billNoSeen, billNoStr);
+    pushToBucket(buckets, occIdx, voucherRows);
 
-    // Track date row too — needed so date carries into subsequent data rows
-    // in same section
     if (rowDate) currentDate = rowDate;
   }
-
-  // Track dates that appear on isolated date rows (before data) so subsequent
-  // data rows inherit them.
-  // (Handled in-loop above — the parser reads date from col 3 of each row and
-  // falls back to the last non-empty date it saw.)
 
   const companySummary = [...companyTotals.entries()]
     .map(([company, pending]) => ({ company, pending, count: 0 }))
     .sort((a, b) => b.pending - a.pending);
-  // fill in per-company count
   for (const entry of companySummary) {
     entry.count = salesRows.filter((r) => r[5] === "DR" && r[3] === `${entry.company}-dialysis`).length;
   }
 
   return {
     salesRows,
+    buckets,
     reviewRows,
     companySummary,
     stats: {
@@ -262,12 +223,13 @@ export function processDialysisWorkbook(workbook) {
       skippedNoCompany,
       totalReceivable,
       outputRows: salesRows.length,
+      sheetCount: buckets.length,
     },
   };
 }
 
 export function buildDialysisOutputWorkbook(result, ledgerNames) {
-  const { salesRows, reviewRows } = result;
+  const { buckets, reviewRows } = result;
   const wb = XLSX.utils.book_new();
 
   const cols = [
@@ -283,10 +245,14 @@ export function buildDialysisOutputWorkbook(result, ledgerNames) {
     { wch: 30 },
     { wch: 12 },
   ];
-  const resolved = resolveRows(salesRows, ledgerNames);
-  const wsSales = XLSX.utils.aoa_to_sheet([DIALYSIS_HEADERS, ...resolved]);
-  wsSales["!cols"] = cols;
-  XLSX.utils.book_append_sheet(wb, wsSales, "DIALYSIS RECEIVABLES");
+
+  buckets.forEach((rows, i) => {
+    if (!rows || rows.length === 0) return;
+    const resolved = resolveRows(rows, ledgerNames);
+    const wsSales = XLSX.utils.aoa_to_sheet([DIALYSIS_HEADERS, ...resolved]);
+    wsSales["!cols"] = cols;
+    XLSX.utils.book_append_sheet(wb, wsSales, bucketSheetName("DIALYSIS RECEIVABLES", i + 1));
+  });
 
   if (reviewRows.length > 0) {
     const wsReview = XLSX.utils.aoa_to_sheet([REVIEW_HEADERS, ...reviewRows]);

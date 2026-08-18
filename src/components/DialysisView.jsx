@@ -89,7 +89,21 @@ export function DialysisView({ state, setState, ledgerNames }) {
             <StatRow label="Skipped — zero pending" value={stats.skippedZeroPending.toLocaleString()} />
             <StatRow label="Skipped — no company (needs review)" value={stats.skippedNoCompany.toLocaleString()} />
             <StatRow label="Total receivable booked" value={fmt(stats.totalReceivable)} />
-            <StatRow label="Output rows (per voucher pair × 2)" value={stats.outputRows.toLocaleString()} />
+            <StatRow
+              label="Output rows (per voucher pair × 2)"
+              value={`${stats.outputRows.toLocaleString()}${stats.sheetCount > 1 ? ` — across ${stats.sheetCount} sheets` : ""}`}
+            />
+
+            {stats.sheetCount > 1 && (
+              <div className="note">
+                <span className="pill teal">Auto-resolved</span>
+                <p>
+                  Some bill numbers repeat. Each repeat goes to its own extra sheet — "DIALYSIS
+                  RECEIVABLES (2)" and so on — so upload each sheet as a separate Tally import and
+                  voucher numbers never collide.
+                </p>
+              </div>
+            )}
 
             {stats.skippedNoCompany > 0 && (
               <div className="note">

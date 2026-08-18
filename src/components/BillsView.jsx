@@ -98,13 +98,32 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult }) {
               value={`${stats.duplicateRowCount.toLocaleString()} across ${stats.duplicateGroupCount.toLocaleString()} groups`}
             />
             <StatRow label="Clean bills carried forward" value={stats.cleanRows.toLocaleString()} />
+
+            {(stats.othersSheetCount > 1 || stats.pharmacySheetCount > 1 || stats.dischargeSheetCount > 1) && (
+              <div className="note">
+                <span className="pill teal">Auto-resolved</span>
+                <p>
+                  Some bill numbers repeat within a category. Each repeat goes to its own extra sheet
+                  — "SALES - OTHERS (2)", "SALES - PHARMACY (2)", etc. — so upload each sheet as a
+                  separate Tally import and voucher numbers never collide. Same Voucher Type
+                  throughout; only the sheet differs.
+                </p>
+              </div>
+            )}
+
             <div className="divider" />
-            <StatRow label="Others — SALES journal rows" value={stats.othersOutputRows.toLocaleString()} />
+            <StatRow
+              label="Others — SALES journal rows"
+              value={`${stats.othersOutputRows.toLocaleString()}${stats.othersSheetCount > 1 ? ` — across ${stats.othersSheetCount} sheets` : ""}`}
+            />
             <StatRow
               label="Pharmacy — SALES journal rows"
-              value={`${stats.pharmacyOutputRows.toLocaleString()} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt bills)`}
+              value={`${stats.pharmacyOutputRows.toLocaleString()}${stats.pharmacySheetCount > 1 ? ` — across ${stats.pharmacySheetCount} sheets` : ""} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt bills)`}
             />
-            <StatRow label="Discharge — SALES journal rows" value={stats.dischargeOutputRows.toLocaleString()} />
+            <StatRow
+              label="Discharge — SALES journal rows"
+              value={`${stats.dischargeOutputRows.toLocaleString()}${stats.dischargeSheetCount > 1 ? ` — across ${stats.dischargeSheetCount} sheets` : ""}`}
+            />
             {stats.pharmacyTaxable > 0 && (
               <>
                 <div className="divider" />
