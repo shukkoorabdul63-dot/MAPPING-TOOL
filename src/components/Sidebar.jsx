@@ -39,7 +39,7 @@ export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {
         </div>
       </div>
 
-      <nav className="nav">
+      <nav className="nav nav-home">
         {NAV_HOME.map((item) => renderNavItem(item, activeView, onNavigate, counts))}
       </nav>
 
@@ -56,10 +56,11 @@ export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {
         <button type="button" className="nav-item ghost" onClick={onOpenWorkings}>
           <span className="nav-icon"><WorkingsIcon /></span>
           <span className="nav-text">
-            <span className="nav-label">Workings</span>
+            <span className="nav-label">Settings</span>
             <span className="nav-hint">Ledger names</span>
           </span>
         </button>
+        <p className="sidebar-watermark">Developed by Abdul Shukkoor</p>
       </div>
     </aside>
   );

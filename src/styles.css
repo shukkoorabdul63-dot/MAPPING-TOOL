@@ -143,6 +143,10 @@ input {
   flex: 1;
 }
 
+.nav-home {
+  flex: 0 0 auto;
+}
+
 .nav-group-label {
   margin: 0.2rem 0.75rem 0.1rem;
   font-size: 0.66rem;
@@ -228,6 +232,15 @@ input {
 .sidebar-foot {
   padding-top: 1rem;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-watermark {
+  margin: 0.75rem 0.75rem 0;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  color: var(--rail-fg-muted);
+  opacity: 0.55;
+  letter-spacing: 0.02em;
 }
 
 /* ==========================================================================

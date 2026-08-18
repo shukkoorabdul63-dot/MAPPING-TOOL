@@ -18,10 +18,10 @@ export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames }) {
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div className="drawer" role="dialog" aria-label="Workings">
+      <div className="drawer" role="dialog" aria-label="Settings">
         <div className="drawer-head">
           <div>
-            <p className="eyebrow">Workings</p>
+            <p className="eyebrow">Settings</p>
             <h2>Ledger &amp; voucher names</h2>
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
