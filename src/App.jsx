@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { WorkingsPanel } from "./components/WorkingsPanel.jsx";
+import { HomeView } from "./components/HomeView.jsx";
 import { ReceiptsView } from "./components/ReceiptsView.jsx";
 import { BillsView } from "./components/BillsView.jsx";
 import { IpCreditView } from "./components/IpCreditView.jsx";
@@ -34,7 +35,7 @@ const EMPTY_IPCREDIT_STATE = {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState("receipts");
+  const [activeView, setActiveView] = useState("home");
   const [workingsOpen, setWorkingsOpen] = useState(false);
   const [ledgerNames, setLedgerNames] = useState(DEFAULT_LEDGER_NAMES);
   const [receiptsState, setReceiptsState] = useState(EMPTY_VIEW_STATE);
@@ -68,6 +69,16 @@ export default function App() {
         counts={counts}
       />
       <main className="workspace">
+        {activeView === "home" && (
+          <HomeView
+            onNavigate={setActiveView}
+            receiptsState={receiptsState}
+            billsState={billsState}
+            billsResult={billsResult}
+            ipCreditState={ipCreditState}
+            dialysisState={dialysisState}
+          />
+        )}
         {activeView === "receipts" && (
           <ReceiptsView ledgerNames={ledgerNames} state={receiptsState} setState={setReceiptsState} />
         )}

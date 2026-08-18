@@ -1,4 +1,5 @@
 import React from "react";
+import { EmptyStateIcon } from "./shared.jsx";
 
 const EXCLUDED_NAMES = new Set(["discharge"]);
 
@@ -78,10 +79,10 @@ export function ReconcileView({ receiptResult, billsResult }) {
             <p className="empty-title">Upload both files to reconcile</p>
             <ul className="empty-list">
               <li className={receiptResult ? "done" : ""}>
-                {receiptResult ? "✓" : "•"} Receipts file — {receiptResult ? "loaded" : "not loaded"}
+                <EmptyStateIcon done={!!receiptResult} /> Receipts file — {receiptResult ? "loaded" : "not loaded"}
               </li>
               <li className={billsResult ? "done" : ""}>
-                {billsResult ? "✓" : "•"} Bills file — {billsResult ? "loaded" : "not loaded"}
+                <EmptyStateIcon done={!!billsResult} /> Bills file — {billsResult ? "loaded" : "not loaded"}
               </li>
             </ul>
           </div>
@@ -103,14 +104,13 @@ export function ReconcileView({ receiptResult, billsResult }) {
             <div className="stat-row">
               <span className="stat-label">Difference (Receipts − Bills)</span>
               <span
-                className="stat-value mono"
-                style={{ color: Math.abs(totals.diff) > 0.01 ? "var(--red)" : "var(--accent)" }}
+                className={`stat-value mono ${Math.abs(totals.diff) > 0.01 ? "amount-bad" : "amount-good"}`}
               >
                 {fmt(totals.diff)}
               </span>
             </div>
             {mismatches > 0 && (
-              <div className="note" style={{ marginTop: "1rem" }}>
+              <div className="note tight-top">
                 <span className="pill red">Mismatch</span>
                 <p>
                   {mismatches} bill name{mismatches === 1 ? "" : "s"} do
@@ -143,8 +143,7 @@ export function ReconcileView({ receiptResult, billsResult }) {
                         <td className="mono ta-r">{fmt(r.receipts)}</td>
                         <td className="mono ta-r">{fmt(r.bills)}</td>
                         <td
-                          className="mono ta-r"
-                          style={{ color: isDiff ? "var(--red)" : "var(--ink-muted)", fontWeight: isDiff ? 700 : 400 }}
+                          className={`mono ta-r ${isDiff ? "amount-bad bold" : "amount-neutral"}`}
                         >
                           {fmt(r.diff)}
                         </td>
@@ -156,8 +155,7 @@ export function ReconcileView({ receiptResult, billsResult }) {
                     <td className="mono ta-r">{fmt(totals.receipts)}</td>
                     <td className="mono ta-r">{fmt(totals.bills)}</td>
                     <td
-                      className="mono ta-r"
-                      style={{ color: Math.abs(totals.diff) > 0.01 ? "var(--red)" : "var(--ink-muted)" }}
+                      className={`mono ta-r ${Math.abs(totals.diff) > 0.01 ? "amount-bad" : "amount-neutral"}`}
                     >
                       {fmt(totals.diff)}
                     </td>

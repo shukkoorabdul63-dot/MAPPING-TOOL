@@ -1,15 +1,27 @@
 import React from "react";
+import {
+  HomeIcon,
+  ReceiptsIcon,
+  BillsIcon,
+  IpCreditIcon,
+  DialysisIcon,
+  ReconcileIcon,
+  MasterIcon,
+  WorkingsIcon,
+} from "./icons.jsx";
+
+const NAV_HOME = [{ id: "home", label: "Home", hint: "Overview", icon: <HomeIcon /> }];
 
 const NAV_PRIMARY = [
-  { id: "receipts", label: "Receipts", hint: "Cash / Card / NEFT" },
-  { id: "bills", label: "Bills", hint: "Sales / Income" },
-  { id: "ipcredit", label: "IP Credit", hint: "Feeds Discharge" },
-  { id: "dialysis", label: "Dialysis", hint: "Scheme receivables" },
-  { id: "reconcile", label: "Reconcile", hint: "Cross-check totals" },
+  { id: "receipts", label: "Receipts", hint: "Cash / Card / NEFT", icon: <ReceiptsIcon /> },
+  { id: "bills", label: "Bills", hint: "Sales / Income", icon: <BillsIcon /> },
+  { id: "ipcredit", label: "IP Credit", hint: "Feeds Discharge", icon: <IpCreditIcon /> },
+  { id: "dialysis", label: "Dialysis", hint: "Scheme receivables", icon: <DialysisIcon /> },
+  { id: "reconcile", label: "Reconcile", hint: "Cross-check totals", icon: <ReconcileIcon /> },
 ];
 
 const NAV_SECONDARY = [
-  { id: "master", label: "Master", hint: "Patient ledgers" },
+  { id: "master", label: "Master", hint: "Patient ledgers", icon: <MasterIcon /> },
 ];
 
 export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {
@@ -28,16 +40,25 @@ export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {
       </div>
 
       <nav className="nav">
-        {NAV_PRIMARY.map((item) => renderNavItem(item, activeView, onNavigate, counts))}
+        {NAV_HOME.map((item) => renderNavItem(item, activeView, onNavigate, counts))}
       </nav>
 
+      <div className="nav">
+        <p className="nav-group-label">Sections</p>
+        {NAV_PRIMARY.map((item) => renderNavItem(item, activeView, onNavigate, counts))}
+      </div>
+
       <div className="sidebar-foot">
+        <p className="nav-group-label">Reference</p>
         <nav className="nav">
           {NAV_SECONDARY.map((item) => renderNavItem(item, activeView, onNavigate, counts))}
         </nav>
         <button type="button" className="nav-item ghost" onClick={onOpenWorkings}>
-          <span className="nav-label">Workings</span>
-          <span className="nav-hint">Ledger names</span>
+          <span className="nav-icon"><WorkingsIcon /></span>
+          <span className="nav-text">
+            <span className="nav-label">Workings</span>
+            <span className="nav-hint">Ledger names</span>
+          </span>
         </button>
       </div>
     </aside>
@@ -54,12 +75,12 @@ function renderNavItem(item, activeView, onNavigate, counts) {
       className={`nav-item${isActive ? " active" : ""}`}
       onClick={() => onNavigate(item.id)}
     >
-      <span className="nav-label">{item.label}</span>
-      {count != null ? (
-        <span className="nav-count mono">{count.toLocaleString()}</span>
-      ) : (
-        <span className="nav-hint">{item.hint}</span>
-      )}
+      <span className="nav-icon">{item.icon}</span>
+      <span className="nav-text">
+        <span className="nav-label">{item.label}</span>
+        {count == null && <span className="nav-hint">{item.hint}</span>}
+      </span>
+      {count != null && <span className="nav-count mono">{count.toLocaleString()}</span>}
     </button>
   );
 }

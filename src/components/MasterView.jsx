@@ -1,7 +1,7 @@
 import React from "react";
 import { computePatientLedgerMaster, buildMasterWorkbook } from "../lib/master.js";
 import { downloadWorkbook } from "../lib/utils.js";
-import { StatRow, Button } from "./shared.jsx";
+import { StatRow, Button, EmptyStateIcon } from "./shared.jsx";
 
 export function MasterView({ receiptResult, billsResult, dialysisResult }) {
   const { list, stats } = computePatientLedgerMaster(receiptResult, billsResult, dialysisResult);
@@ -32,13 +32,13 @@ export function MasterView({ receiptResult, billsResult, dialysisResult }) {
             <p className="empty-title">No party names yet</p>
             <ul className="empty-list">
               <li className={receiptResult ? "done" : ""}>
-                {receiptResult ? "✓" : "•"} Receipts — {receiptResult ? "loaded" : "not loaded"}
+                <EmptyStateIcon done={!!receiptResult} /> Receipts — {receiptResult ? "loaded" : "not loaded"}
               </li>
               <li className={billsResult ? "done" : ""}>
-                {billsResult ? "✓" : "•"} Bills — {billsResult ? "loaded" : "not loaded"}
+                <EmptyStateIcon done={!!billsResult} /> Bills — {billsResult ? "loaded" : "not loaded"}
               </li>
               <li className={dialysisResult ? "done" : ""}>
-                {dialysisResult ? "✓" : "•"} Dialysis — {dialysisResult ? "loaded" : "not loaded"}
+                <EmptyStateIcon done={!!dialysisResult} /> Dialysis — {dialysisResult ? "loaded" : "not loaded"}
               </li>
             </ul>
           </div>
