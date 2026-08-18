@@ -79,6 +79,19 @@ export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames }) {
               <Field label="Discharge — alternate" placeholder={DEFAULT_LEDGER_NAMES.dischargeAltVoucher} value={ledgerNames.dischargeAltVoucher} onChange={update("dischargeAltVoucher")} />
             </div>
           </div>
+
+          <div className="drawer-section">
+            <h3>Dialysis receivables</h3>
+            <p className="lede small">
+              Voucher type used when booking dialysis receivables from schemes
+              (KASP, MEDISEP, etc.). Company ledger is auto-composed as
+              "{`{Company}-dialysis`}".
+            </p>
+            <div className="field-stack">
+              <Field label="Dialysis — voucher type" placeholder={DEFAULT_LEDGER_NAMES.dialysisVoucher} value={ledgerNames.dialysisVoucher} onChange={update("dialysisVoucher")} />
+              <Field label="Dialysis — alternate" placeholder={DEFAULT_LEDGER_NAMES.dialysisAltVoucher} value={ledgerNames.dialysisAltVoucher} onChange={update("dialysisAltVoucher")} />
+            </div>
+          </div>
         </div>
 
         <div className="drawer-foot">

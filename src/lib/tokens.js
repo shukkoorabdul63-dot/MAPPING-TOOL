@@ -10,12 +10,14 @@ export const RECEIPT_ALT_TOKEN = "$RECEIPT_ALT$";
 export const OTHERS_ALT_TOKEN = "$OTHERS_ALT$";
 export const PHARMACY_ALT_TOKEN = "$PHARMACY_ALT$";
 export const DISCHARGE_ALT_TOKEN = "$DISCHARGE_ALT$";
+export const DIALYSIS_ALT_TOKEN = "$DIALYSIS_ALT$";
 
 // Base voucher-type tokens — occurrence-1 rows use these so their string can
 // still be renamed via Workings without reprocessing.
 export const OTHERS_TOKEN = "$OTHERS$";
 export const PHARMACY_TOKEN = "$PHARMACY$";
 export const DISCHARGE_TOKEN = "$DISCHARGE$";
+export const DIALYSIS_TOKEN = "$DIALYSIS$";
 
 export const DEFAULT_LEDGER_NAMES = {
   cash: "CASH",
@@ -36,6 +38,10 @@ export const DEFAULT_LEDGER_NAMES = {
   othersAltVoucher: "Sales 2",
   pharmacyAltVoucher: "Sales 2",
   dischargeAltVoucher: "Sales 2",
+
+  // Dialysis (receivables from insurance/scheme companies) side
+  dialysisVoucher: "Journal-Dialysis",
+  dialysisAltVoucher: "Journal-Dialysis 2",
 };
 
 function resolveSingle(value, ledgerNames) {
@@ -56,6 +62,10 @@ function resolveSingle(value, ledgerNames) {
     return ledgerNames.pharmacyAltVoucher || DEFAULT_LEDGER_NAMES.pharmacyAltVoucher;
   if (value === DISCHARGE_ALT_TOKEN)
     return ledgerNames.dischargeAltVoucher || DEFAULT_LEDGER_NAMES.dischargeAltVoucher;
+  if (value === DIALYSIS_TOKEN)
+    return ledgerNames.dialysisVoucher || DEFAULT_LEDGER_NAMES.dialysisVoucher;
+  if (value === DIALYSIS_ALT_TOKEN)
+    return ledgerNames.dialysisAltVoucher || DEFAULT_LEDGER_NAMES.dialysisAltVoucher;
   return value;
 }
 

@@ -4,6 +4,7 @@ import { WorkingsPanel } from "./components/WorkingsPanel.jsx";
 import { ReceiptsView } from "./components/ReceiptsView.jsx";
 import { BillsView } from "./components/BillsView.jsx";
 import { IpCreditView } from "./components/IpCreditView.jsx";
+import { DialysisView } from "./components/DialysisView.jsx";
 import { ReconcileView } from "./components/ReconcileView.jsx";
 import { MasterView } from "./components/MasterView.jsx";
 import { mapBills } from "./lib/bills.js";
@@ -39,6 +40,7 @@ export default function App() {
   const [receiptsState, setReceiptsState] = useState(EMPTY_VIEW_STATE);
   const [billsState, setBillsState] = useState(EMPTY_BILLS_STATE);
   const [ipCreditState, setIpCreditState] = useState(EMPTY_IPCREDIT_STATE);
+  const [dialysisState, setDialysisState] = useState(EMPTY_VIEW_STATE);
 
   // Bills result is derived — recomputed whenever parsed bills or IP credit
   // change. That way, uploading IP Credit after Bills doesn't need a
@@ -52,6 +54,7 @@ export default function App() {
     receipts: receiptsState.result?.stats?.candidateBills ?? null,
     bills: billsState.parsed?.scannedDataRows ?? null,
     ipcredit: ipCreditState.result?.stats?.dataRows ?? null,
+    dialysis: dialysisState.result?.stats?.bookedRows ?? null,
     reconcile: null,
     master: null,
   };
@@ -79,11 +82,18 @@ export default function App() {
         {activeView === "ipcredit" && (
           <IpCreditView state={ipCreditState} setState={setIpCreditState} />
         )}
+        {activeView === "dialysis" && (
+          <DialysisView state={dialysisState} setState={setDialysisState} ledgerNames={ledgerNames} />
+        )}
         {activeView === "reconcile" && (
           <ReconcileView receiptResult={receiptsState.result} billsResult={billsResult} />
         )}
         {activeView === "master" && (
-          <MasterView receiptResult={receiptsState.result} billsResult={billsResult} />
+          <MasterView
+            receiptResult={receiptsState.result}
+            billsResult={billsResult}
+            dialysisResult={dialysisState.result}
+          />
         )}
       </main>
       <WorkingsPanel

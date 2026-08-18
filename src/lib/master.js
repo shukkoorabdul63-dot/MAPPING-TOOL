@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
  * return a deduped, sorted list. Each entry keeps track of where it was
  * seen — useful for the audit/download.
  */
-export function computePatientLedgerMaster(receiptResult, billsResult) {
+export function computePatientLedgerMaster(receiptResult, billsResult, dialysisResult) {
   const map = new Map();
 
   const add = (party, source) => {
@@ -13,19 +13,14 @@ export function computePatientLedgerMaster(receiptResult, billsResult) {
     const key = party.trim();
     if (!key) return;
     if (!map.has(key)) {
-      map.set(key, { partyName: key, inReceipts: false, inBills: false });
+      map.set(key, { partyName: key, inReceipts: false, inBills: false, inDialysis: false });
     }
     const entry = map.get(key);
     if (source === "receipts") entry.inReceipts = true;
     if (source === "bills") entry.inBills = true;
+    if (source === "dialysis") entry.inDialysis = true;
   };
 
-  // Receipts: party names live as row[3] in receipt/payment/creditNote rows,
-  // and only for the "party" leg (not the ledger legs like CASH/CARD/NEFT).
-  // The simpler and more accurate route is to walk receiptResult's underlying
-  // billNameSummary — but that only has aggregated bill names, not party
-  // names. So instead we scan the row arrays and pick anything that looks like
-  // a "id - name" party string.
   const scanRows = (rows, source) => {
     if (!rows) return;
     for (const row of rows) {
@@ -48,25 +43,39 @@ export function computePatientLedgerMaster(receiptResult, billsResult) {
     }
   }
 
+  if (dialysisResult && dialysisResult.salesRows) {
+    scanRows(dialysisResult.salesRows, "dialysis");
+  }
+
   const list = [...map.values()].sort((a, b) => a.partyName.localeCompare(b.partyName));
-  const inBoth = list.filter((r) => r.inReceipts && r.inBills).length;
-  const onlyReceipts = list.filter((r) => r.inReceipts && !r.inBills).length;
-  const onlyBills = list.filter((r) => !r.inReceipts && r.inBills).length;
+  const inAll = list.filter((r) => r.inReceipts && r.inBills && r.inDialysis).length;
+  const total = list.length;
 
   return {
     list,
-    stats: { total: list.length, inBoth, onlyReceipts, onlyBills },
+    stats: {
+      total,
+      inReceipts: list.filter((r) => r.inReceipts).length,
+      inBills: list.filter((r) => r.inBills).length,
+      inDialysis: list.filter((r) => r.inDialysis).length,
+      inAll,
+    },
   };
 }
 
 export function buildMasterWorkbook(list) {
   const wb = XLSX.utils.book_new();
   const rows = [
-    ["Party Name (Tally Ledger)", "In Receipts", "In Bills"],
-    ...list.map((r) => [r.partyName, r.inReceipts ? "Y" : "", r.inBills ? "Y" : ""]),
+    ["Party Name (Tally Ledger)", "In Receipts", "In Bills", "In Dialysis"],
+    ...list.map((r) => [
+      r.partyName,
+      r.inReceipts ? "Y" : "",
+      r.inBills ? "Y" : "",
+      r.inDialysis ? "Y" : "",
+    ]),
   ];
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{ wch: 40 }, { wch: 14 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 40 }, { wch: 14 }, { wch: 12 }, { wch: 14 }];
   XLSX.utils.book_append_sheet(wb, ws, "PATIENT LEDGERS");
   return wb;
 }
