@@ -190,12 +190,13 @@ export function processDialysisWorkbook(workbook) {
     companyTotals.set(company, (companyTotals.get(company) || 0) + pending);
 
     const narration = employee ? `Dialysis receivable — ${employee}` : "Dialysis receivable";
-    // DR: company (receivable), CR: patient (settles patient's outstanding)
-    // Bill Type "New Ref" with patient ledger as Bill Name lets Tally track
-    // the pending balance against a named bill reference.
+    // DR: company (receivable), CR: patient (settles patient's outstanding).
+    // Only the DR leg — the insurance/scheme company — gets a bill reference
+    // ("New Reference" with the patient ledger as Bill Name) so Tally tracks
+    // the pending balance against that company. The CR leg carries none.
     const voucherRows = [
-      [DIALYSIS_TOKEN, dateStr, billNoStr, partyCompany, pending, "DR", "New Ref", partyPatient, pending, narration, null],
-      [DIALYSIS_TOKEN, dateStr, billNoStr, partyPatient, pending, "CR", "New Ref", partyPatient, pending, narration, null],
+      [DIALYSIS_TOKEN, dateStr, billNoStr, partyCompany, pending, "DR", "New Reference", partyPatient, pending, narration, null],
+      [DIALYSIS_TOKEN, dateStr, billNoStr, partyPatient, pending, "CR", null, null, null, narration, null],
     ];
     salesRows.push(...voucherRows);
     const occIdx = nextOccurrence(billNoSeen, billNoStr);
