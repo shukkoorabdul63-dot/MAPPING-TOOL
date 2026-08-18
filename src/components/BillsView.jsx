@@ -1,30 +1,35 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
-import { processBillsWorkbook, buildBillsOutputWorkbook } from "../lib/bills.js";
+import { parseBillsWorkbook, mapBills, buildBillsOutputWorkbook } from "../lib/bills.js";
+import { resolveRows } from "../lib/tokens.js";
 import { downloadWorkbook } from "../lib/utils.js";
-import { StatRow, Toggle, Button, StatusRow, Dropzone } from "./shared.jsx";
+import { StatRow, Button, StatusRow, Dropzone } from "./shared.jsx";
 
 const STATUS_LABELS = {
-  processing: "Reading and mapping rows…",
-  done: "Mapping complete",
+  processing: "Reading and parsing rows…",
+  done: "Parsed",
   error: "Could not process this file",
 };
 
-export function BillsView({ state, setState }) {
-  const { fileName, status, error, result, showPreview } = state;
+function fmt(n) {
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function BillsView({ state, setState, ledgerNames, ipCreditResult }) {
+  const { fileName, status, error, parsed } = state;
   const patch = useCallback((updates) => setState((s) => ({ ...s, ...updates })), [setState]);
 
   const handleFile = useCallback(
     (file) => {
-      patch({ fileName: file.name, status: "processing", error: null, result: null });
+      patch({ fileName: file.name, status: "processing", error: null, parsed: null });
       const reader = new FileReader();
       reader.onload = (e) => {
         setTimeout(() => {
           try {
             const data = new Uint8Array(e.target.result);
             const workbook = XLSX.read(data, { type: "array", cellDates: true });
-            const r = processBillsWorkbook(workbook);
-            patch({ result: r, status: "done" });
+            const p = parseBillsWorkbook(workbook);
+            patch({ parsed: p, status: "done" });
           } catch (err) {
             patch({ error: err.message || "Something went wrong.", status: "error" });
           }
@@ -37,17 +42,26 @@ export function BillsView({ state, setState }) {
   );
 
   const reset = () =>
-    patch({ fileName: null, status: "idle", error: null, result: null, showPreview: false });
+    patch({ fileName: null, status: "idle", error: null, parsed: null });
+
+  // Remap whenever parsed data or IP credit changes — cheap since the raw
+  // parse pass isn't re-run.
+  const result = useMemo(() => {
+    if (!parsed) return null;
+    return mapBills(parsed, ipCreditResult?.creditBySettled || new Map());
+  }, [parsed, ipCreditResult]);
 
   const download = () => {
     if (!result) return;
-    const wb = buildBillsOutputWorkbook(result);
+    const wb = buildBillsOutputWorkbook(result, ledgerNames);
     const base = (fileName || "teja_bills").replace(/\.[^/.]+$/, "");
     downloadWorkbook(wb, `${base}_TALLY_MAPPED.xlsx`);
   };
 
   const stats = result?.stats;
-  const previewRows = result?.salesRows?.slice(0, 12) ?? [];
+  const previewOthers = result ? resolveRows(result.salesOthersRows.slice(0, 6), ledgerNames) : [];
+  const previewPharmacy = result ? resolveRows(result.salesPharmacyRows.slice(0, 6), ledgerNames) : [];
+  const previewDischarge = result ? resolveRows(result.salesDischargeRows.slice(0, 6), ledgerNames) : [];
 
   return (
     <div className="view">
@@ -55,10 +69,10 @@ export function BillsView({ state, setState }) {
         <p className="eyebrow">Bills</p>
         <h1>Sales vouchers</h1>
         <p className="lede">
-          Upload the bill analysis export from Teja. Others and Pharmacy map
-          directly to a SALES journal (Pharmacy with CGST/SGST split when
-          taxable); Discharge is kept as a raw sheet until its working rules
-          are added.
+          Upload the bill analysis export from Teja. The tool splits it into
+          three SALES journals — Others, Pharmacy (with CGST/SGST when
+          taxable), and Discharge. Discharge income is net of IP credit when
+          the IP Credit report is loaded on its tab.
         </p>
       </header>
 
@@ -80,88 +94,61 @@ export function BillsView({ state, setState }) {
             <StatRow label="Bill rows scanned" value={stats.scannedDataRows.toLocaleString()} />
             <StatRow label="Cancelled bills removed" value={stats.cancelledCount.toLocaleString()} />
             <StatRow
-              label="Duplicate rows removed (kept first, dropped extras)"
+              label="Duplicate rows removed (kept first)"
               value={`${stats.duplicateRowCount.toLocaleString()} across ${stats.duplicateGroupCount.toLocaleString()} groups`}
             />
             <StatRow label="Clean bills carried forward" value={stats.cleanRows.toLocaleString()} />
             <div className="divider" />
-            <StatRow label="Others — mapped to SALES journal" value={stats.othersCount.toLocaleString()} />
+            <StatRow label="Others — SALES journal rows" value={stats.othersOutputRows.toLocaleString()} />
             <StatRow
-              label="Pharmacy — mapped to SALES journal"
-              value={`${stats.pharmacyCount.toLocaleString()} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt)`}
+              label="Pharmacy — SALES journal rows"
+              value={`${stats.pharmacyOutputRows.toLocaleString()} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt bills)`}
             />
-            <StatRow label="Discharge — held as raw sheet" value={stats.dischargeCount.toLocaleString()} />
-            <StatRow label="SALES output rows" value={stats.salesOutputRows.toLocaleString()} />
+            <StatRow label="Discharge — SALES journal rows" value={stats.dischargeOutputRows.toLocaleString()} />
             {stats.pharmacyTaxable > 0 && (
               <>
                 <div className="divider" />
+                <StatRow label="Pharmacy CGST collected" value={fmt(stats.totalCgst)} />
+                <StatRow label="Pharmacy SGST collected" value={fmt(stats.totalSgst)} />
+              </>
+            )}
+            {stats.dischargeCount > 0 && (
+              <>
+                <div className="divider" />
                 <StatRow
-                  label="Pharmacy CGST collected"
-                  value={stats.totalCgst.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  label="Discharge bills matched with IP Credit"
+                  value={`${stats.dischargeMatched.toLocaleString()} of ${stats.dischargeCount.toLocaleString()}`}
                 />
                 <StatRow
-                  label="Pharmacy SGST collected"
-                  value={stats.totalSgst.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  label="Total IP credit applied to Discharge income"
+                  value={fmt(stats.dischargeIpCreditApplied)}
                 />
               </>
             )}
 
-            {stats.dischargeCount > 0 && (
+            {!ipCreditResult && stats.dischargeCount > 0 && (
               <div className="note">
-                <span className="pill amber">Pending rules</span>
+                <span className="pill amber">IP Credit not loaded</span>
                 <p>
-                  Discharge has its own working rules that aren't wired in yet. Those rows go
-                  to a raw sheet in the download so nothing is lost — the SALES journal covers
-                  Others and Pharmacy.
+                  Discharge income is currently posted as full Gross Amount.
+                  Upload the IP Credit report on its own tab and the numbers
+                  update here automatically — no need to re-upload bills.
                 </p>
               </div>
             )}
 
-            <div className="divider" />
-
-            <Toggle
-              checked={showPreview}
-              onChange={(v) => patch({ showPreview: v })}
-              label="Preview SALES journal rows"
-              description="First 12 rows of the mapped Others journal"
-            />
-
-            {showPreview && previewRows.length > 0 && (
-              <>
-                <div className="table-wrap">
-                  <table className="preview">
-                    <thead>
-                      <tr>
-                        <th>Voucher Type</th>
-                        <th>Date</th>
-                        <th>Voucher No.</th>
-                        <th>Party / Ledger</th>
-                        <th className="ta-r">Amount</th>
-                        <th>Dr/Cr</th>
-                        <th>Cost Center</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewRows.map((row, i) => (
-                        <tr key={i}>
-                          <td><span className="pill navy">{row[0]}</span></td>
-                          <td className="mono">{row[1]}</td>
-                          <td className="mono">{row[2]}</td>
-                          <td>{row[3]}</td>
-                          <td className="mono ta-r">
-                            {Number(row[4]).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="mono">{row[5]}</td>
-                          <td className="mono">{row[7] || ""}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="preview-note">
-                  Sample rows only — {stats.salesOutputRows.toLocaleString()} total in the download.
+            {stats.dischargeReviewCount > 0 && (
+              <div className="note">
+                <span className="pill red">Review</span>
+                <p>
+                  {stats.dischargeReviewCount} discharge bill
+                  {stats.dischargeReviewCount === 1 ? "" : "s"} would post as
+                  negative income (IP credit applied exceeds bill gross). The
+                  entry is still generated so the ledger balances, but check
+                  the "DISCHARGE TO REVIEW" sheet — usually a stale or
+                  over-applied IP credit.
                 </p>
-              </>
+              </div>
             )}
 
             <div className="btn-row">
@@ -173,8 +160,56 @@ export function BillsView({ state, setState }) {
               </Button>
             </div>
           </section>
+
+          {previewOthers.length > 0 && (
+            <PreviewCard title="SALES — Others (preview)" rows={previewOthers} />
+          )}
+          {previewPharmacy.length > 0 && (
+            <PreviewCard title="SALES — Pharmacy (preview)" rows={previewPharmacy} />
+          )}
+          {previewDischarge.length > 0 && (
+            <PreviewCard title="SALES — Discharge (preview)" rows={previewDischarge} />
+          )}
         </>
       )}
     </div>
+  );
+}
+
+function PreviewCard({ title, rows }) {
+  return (
+    <section className="card">
+      <h2 className="card-title">{title}</h2>
+      <div className="table-wrap">
+        <table className="preview">
+          <thead>
+            <tr>
+              <th>Voucher Type</th>
+              <th>Date</th>
+              <th>Voucher No.</th>
+              <th>Party / Ledger</th>
+              <th className="ta-r">Amount</th>
+              <th>Dr/Cr</th>
+              <th>Cost Center</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i}>
+                <td><span className="pill navy">{row[0]}</span></td>
+                <td className="mono">{row[1]}</td>
+                <td className="mono">{row[2]}</td>
+                <td>{row[3]}</td>
+                <td className="mono ta-r">
+                  {Number(row[4]).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </td>
+                <td className="mono">{row[5]}</td>
+                <td className="mono">{row[7] || ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

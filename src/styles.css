@@ -550,6 +550,7 @@ table.preview tr.total-row td {
   padding-top: 0.75rem;
   border-top: 1px solid var(--border);
 }
+.drawer-section.noborder { padding-top: 0; border-top: none; }
 .drawer-section h3 { margin-top: 0; }
 
 .icon-btn {

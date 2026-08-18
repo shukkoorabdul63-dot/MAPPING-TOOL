@@ -1,8 +1,16 @@
 import * as XLSX from "xlsx";
 import { toNumber, normHeader, excelSerialToDDMMYYYY } from "./utils.js";
+import {
+  OTHERS_TOKEN,
+  PHARMACY_TOKEN,
+  DISCHARGE_TOKEN,
+  OTHERS_ALT_TOKEN,
+  PHARMACY_ALT_TOKEN,
+  DISCHARGE_ALT_TOKEN,
+  resolveRows,
+  voucherTypeForOccurrence,
+} from "./tokens.js";
 
-// Matches the real SALES template layout (8 columns) — confirmed from the
-// user's own upload sheet, distinct from the RECEIPT template's 11 columns.
 export const SALES_HEADERS = [
   "Voucher Type",
   "Date",
@@ -14,7 +22,6 @@ export const SALES_HEADERS = [
   "Cost Center",
 ];
 
-// The "column needed" list from the user's own reference sheet, in order.
 export const BILL_NEEDED_HEADERS = [
   "BILLNAME",
   "BILLNUMBER",
@@ -34,7 +41,6 @@ export const BILL_NEEDED_HEADERS = [
 ];
 
 const DUPLICATE_LOG_HEADERS = [...BILL_NEEDED_HEADERS, "Reason"];
-
 const PHARMACY_NAMES = new Set(["pharmacy", "ip pharmacy"]);
 
 function rawRow(c) {
@@ -57,7 +63,12 @@ function rawRow(c) {
   ];
 }
 
-export function processBillsWorkbook(workbook) {
+/**
+ * Parse the raw workbook into a normalized candidate list. Kept separate
+ * from mapping so remapping (e.g. after an IP Credit report is loaded, or
+ * after ledger names change) is cheap — the parse pass only runs once.
+ */
+export function parseBillsWorkbook(workbook) {
   const sheetName = workbook.SheetNames[0];
   const ws = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
@@ -103,18 +114,13 @@ export function processBillsWorkbook(workbook) {
     grossAmount: col("GROSSAMOUNT"),
   };
 
-  const missing = Object.entries(required)
-    .filter(([, v]) => v == null)
-    .map(([k]) => k);
+  const missing = Object.entries(required).filter(([, v]) => v == null).map(([k]) => k);
   if (missing.length) {
     throw new Error(
-      `Could not find the following required column(s) in the header row: ${missing.join(
-        ", "
-      )}. Check that this is a bill analysis export from Teja.`
+      `Could not find the following required column(s) in the header row: ${missing.join(", ")}.`
     );
   }
 
-  // Pass 1: extract candidate bill rows
   const candidates = [];
   let scannedDataRows = 0;
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
@@ -143,7 +149,18 @@ export function processBillsWorkbook(workbook) {
     });
   }
 
-  // Pass 2: drop cancelled bills entirely
+  return { candidates, scannedDataRows };
+}
+
+/**
+ * Map parsed candidates into the SALES journals for Others, Pharmacy, and
+ * Discharge. Takes an optional `ipCreditMap` (settled bill no → total
+ * credit) — when present, Discharge income is reduced by the mapped amount.
+ */
+export function mapBills(parsed, ipCreditMap = new Map()) {
+  const { candidates, scannedDataRows } = parsed;
+
+  // Step 1: drop cancelled
   let cancelledCount = 0;
   const notCancelled = [];
   for (const c of candidates) {
@@ -154,43 +171,49 @@ export function processBillsWorkbook(workbook) {
     notCancelled.push(c);
   }
 
-  // Pass 3: Excel-style dedup on (Bill Number + Bill Name). When the same
-  // combination appears more than once (Teja emits identical bills once per
-  // PAYMENTCODE), keep the first row and drop the extras — otherwise the
-  // income would be counted multiple times.
-  const groupKey = (c) => `${c.billNo}||${c.billName}`;
+  // Step 2: Excel-style dedup on (Bill No + Bill Name). Teja emits one row per
+  // PAYMENTCODE for the same underlying bill; keep the first, drop the rest.
   const seenGroups = new Set();
   const duplicateLogRows = [];
   let duplicateRowCount = 0;
-  let duplicateGroupCount = 0;
   const seenGroupsForCount = new Set();
+  let duplicateGroupCount = 0;
   const clean = [];
   for (const c of notCancelled) {
-    const k = groupKey(c);
+    const k = `${c.billNo}||${c.billName}`;
     if (seenGroups.has(k)) {
       duplicateRowCount++;
       if (!seenGroupsForCount.has(k)) {
         seenGroupsForCount.add(k);
         duplicateGroupCount++;
       }
-      duplicateLogRows.push([...rawRow(c), `Duplicate Bill No. + Bill Name — kept the first row, dropped this one`]);
+      duplicateLogRows.push([...rawRow(c), "Duplicate Bill No. + Bill Name — kept first, dropped this"]);
       continue;
     }
     seenGroups.add(k);
     clean.push(c);
   }
 
-  // Pass 4: split into Discharge / Pharmacy (both) / Others, and build a
-  // per-Bill-Name gross-amount summary for cross-checking against receipts.
-  const dischargeRows = [];
-  const othersRawRows = [];
-  const pharmacyMappedRows = []; // pharmacy rows that were mapped (audit trail)
-  const salesRows = [];
+  // Step 3: categorize + map to SALES rows per sheet, tracking per-sheet
+  // per-billNo occurrence so we can auto-resolve duplicate voucher numbers
+  // that fall inside the same sheet.
+  const salesOthersRows = [];
+  const salesPharmacyRows = [];
+  const salesDischargeRows = [];
   const grossByBillName = new Map();
+  const dischargeReviewRows = []; // negative income cases
+
+  const othersOccurrence = new Map();
+  const pharmacyOccurrence = new Map();
+  const dischargeOccurrence = new Map();
+
   let pharmacyTaxable = 0;
   let pharmacyExempt = 0;
   let totalCgst = 0;
   let totalSgst = 0;
+  let dischargeMatched = 0;
+  let dischargeUnmatched = 0;
+  let dischargeIpCreditApplied = 0;
 
   for (const c of clean) {
     if (!grossByBillName.has(c.billName)) {
@@ -201,22 +224,46 @@ export function processBillsWorkbook(workbook) {
     gEntry.count += 1;
 
     const nameLower = c.billName.toLowerCase();
-    if (nameLower === "discharge") {
-      dischargeRows.push(rawRow(c));
-      continue;
-    }
-
     const party = `${c.opNumber} - ${c.patientName}`;
     const incomeHead = `${c.billName} INCOME-${c.ipop}`;
 
+    if (nameLower === "discharge") {
+      const ipCredit = ipCreditMap.get(c.billNo) || 0;
+      if (ipCredit > 0) {
+        dischargeMatched++;
+        dischargeIpCreditApplied += ipCredit;
+      } else {
+        dischargeUnmatched++;
+      }
+
+      const income = c.grossAmount - ipCredit;
+      const drParty = income - c.billDiscount;
+
+      // Flag negative income (over-refund / stale IP credit) for the user
+      if (income < -0.01) {
+        dischargeReviewRows.push([
+          ...rawRow(c),
+          `Gross ₹${c.grossAmount.toFixed(2)} − IP credit ₹${ipCredit.toFixed(2)} = ₹${income.toFixed(2)} (negative). Review — likely stale or over-applied IP credit.`,
+        ]);
+      }
+
+      const occ = (dischargeOccurrence.get(c.billNo) || 0) + 1;
+      dischargeOccurrence.set(c.billNo, occ);
+      const vt = voucherTypeForOccurrence(DISCHARGE_TOKEN, occ, DISCHARGE_ALT_TOKEN);
+
+      salesDischargeRows.push([vt, c.date, c.billNo, party, drParty, "DR", null, null]);
+      if (c.billDiscount > 0) {
+        salesDischargeRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+      }
+      salesDischargeRows.push([vt, c.date, c.billNo, incomeHead, income, "CR", null, c.doctorCode]);
+      continue;
+    }
+
     if (PHARMACY_NAMES.has(nameLower)) {
-      // Pharmacy: taxable when VATAMOUNT > 0, else exempted.
-      // Taxable value = Gross − VAT (by design). When a bill mixes taxable and
-      // exempt items, the exempt portion is absorbed into the income line —
-      // this is intended, so the ledger stays balanced without a separate
-      // exempt-income split.
       const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
-      pharmacyMappedRows.push(rawRow(c));
+      const occ = (pharmacyOccurrence.get(c.billNo) || 0) + 1;
+      pharmacyOccurrence.set(c.billNo, occ);
+      const vt = voucherTypeForOccurrence(PHARMACY_TOKEN, occ, PHARMACY_ALT_TOKEN);
 
       if (c.vatAmount > 0) {
         pharmacyTaxable++;
@@ -226,65 +273,80 @@ export function processBillsWorkbook(workbook) {
         totalCgst += cgst;
         totalSgst += sgst;
 
-        salesRows.push(["Journal", c.date, c.billNo, party, drAmount, "DR", null, null]);
+        salesPharmacyRows.push([vt, c.date, c.billNo, party, drAmount, "DR", null, null]);
         if (c.billDiscount > 0) {
-          salesRows.push(["Journal", c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+          salesPharmacyRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
         }
-        salesRows.push(["Journal", c.date, c.billNo, incomeHead, taxableValue, "CR", null, c.doctorCode]);
-        salesRows.push(["Journal", c.date, c.billNo, "CGST", cgst, "CR", null, null]);
-        salesRows.push(["Journal", c.date, c.billNo, "SGST", sgst, "CR", null, null]);
+        salesPharmacyRows.push([vt, c.date, c.billNo, incomeHead, taxableValue, "CR", null, c.doctorCode]);
+        salesPharmacyRows.push([vt, c.date, c.billNo, "CGST", cgst, "CR", null, null]);
+        salesPharmacyRows.push([vt, c.date, c.billNo, "SGST", sgst, "CR", null, null]);
       } else {
         pharmacyExempt++;
-        salesRows.push(["Journal", c.date, c.billNo, party, drAmount, "DR", null, null]);
+        salesPharmacyRows.push([vt, c.date, c.billNo, party, drAmount, "DR", null, null]);
         if (c.billDiscount > 0) {
-          salesRows.push(["Journal", c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+          salesPharmacyRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
         }
-        salesRows.push(["Journal", c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
+        salesPharmacyRows.push([vt, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
       }
       continue;
     }
 
-    // Others: fully mapped SALES journal entry (unchanged).
-    othersRawRows.push(rawRow(c));
+    // Others
     const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
-    salesRows.push(["Journal", c.date, c.billNo, party, drAmount, "DR", null, null]);
-    salesRows.push(["Journal", c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
+    const occ = (othersOccurrence.get(c.billNo) || 0) + 1;
+    othersOccurrence.set(c.billNo, occ);
+    const vt = voucherTypeForOccurrence(OTHERS_TOKEN, occ, OTHERS_ALT_TOKEN);
+
+    salesOthersRows.push([vt, c.date, c.billNo, party, drAmount, "DR", null, null]);
+    salesOthersRows.push([vt, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
     if (c.billDiscount > 0) {
-      salesRows.push(["Journal", c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
+      salesOthersRows.push([vt, c.date, c.billNo, "Discount", c.billDiscount, "DR", null, null]);
     }
   }
 
-  const billGrossByName = [...grossByBillName.values()].sort(
-    (a, b) => b.grossAmount - a.grossAmount
-  );
+  const billGrossByName = [...grossByBillName.values()].sort((a, b) => b.grossAmount - a.grossAmount);
 
   return {
-    dischargeRows,
-    pharmacyMappedRows,
-    othersRawRows,
-    salesRows,
+    salesOthersRows,
+    salesPharmacyRows,
+    salesDischargeRows,
     duplicateLogRows,
+    dischargeReviewRows,
     billGrossByName,
+    // Also expose the parsed clean rows so the master patient list can use them.
+    cleanCandidates: clean,
     stats: {
       scannedDataRows,
       cancelledCount,
       duplicateGroupCount,
       duplicateRowCount,
-      dischargeCount: dischargeRows.length,
-      pharmacyCount: pharmacyMappedRows.length,
+      cleanRows: clean.length,
+      othersCount: [...othersOccurrence.values()].reduce((a, b) => a + b, 0),
+      pharmacyCount: [...pharmacyOccurrence.values()].reduce((a, b) => a + b, 0),
+      dischargeCount: [...dischargeOccurrence.values()].reduce((a, b) => a + b, 0),
       pharmacyTaxable,
       pharmacyExempt,
       totalCgst,
       totalSgst,
-      othersCount: othersRawRows.length,
-      salesOutputRows: salesRows.length,
-      cleanRows: clean.length,
+      dischargeMatched,
+      dischargeUnmatched,
+      dischargeIpCreditApplied,
+      dischargeReviewCount: dischargeReviewRows.length,
+      othersOutputRows: salesOthersRows.length,
+      pharmacyOutputRows: salesPharmacyRows.length,
+      dischargeOutputRows: salesDischargeRows.length,
     },
   };
 }
 
-export function buildBillsOutputWorkbook(result) {
-  const { dischargeRows, pharmacyMappedRows, salesRows, duplicateLogRows } = result;
+export function buildBillsOutputWorkbook(result, ledgerNames) {
+  const {
+    salesOthersRows,
+    salesPharmacyRows,
+    salesDischargeRows,
+    duplicateLogRows,
+    dischargeReviewRows,
+  } = result;
   const wb = XLSX.utils.book_new();
 
   const salesCols = [
@@ -297,25 +359,31 @@ export function buildBillsOutputWorkbook(result) {
     { wch: 16 },
     { wch: 12 },
   ];
-  const wsSales = XLSX.utils.aoa_to_sheet([SALES_HEADERS, ...salesRows]);
-  wsSales["!cols"] = salesCols;
-  XLSX.utils.book_append_sheet(wb, wsSales, "SALES");
+
+  const addSalesSheet = (rows, name) => {
+    const resolved = resolveRows(rows, ledgerNames);
+    const ws = XLSX.utils.aoa_to_sheet([SALES_HEADERS, ...resolved]);
+    ws["!cols"] = salesCols;
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+
+  addSalesSheet(salesOthersRows, "SALES - OTHERS");
+  addSalesSheet(salesPharmacyRows, "SALES - PHARMACY");
+  addSalesSheet(salesDischargeRows, "SALES - DISCHARGE");
 
   const rawCols = BILL_NEEDED_HEADERS.map((h) =>
     h === "PATIENTNAME" ? { wch: 26 } : h === "BILLNAME" ? { wch: 22 } : { wch: 14 }
   );
 
-  const wsDischarge = XLSX.utils.aoa_to_sheet([BILL_NEEDED_HEADERS, ...dischargeRows]);
-  wsDischarge["!cols"] = rawCols;
-  XLSX.utils.book_append_sheet(wb, wsDischarge, "DISCHARGE (raw)");
-
-  const wsPharmacy = XLSX.utils.aoa_to_sheet([BILL_NEEDED_HEADERS, ...pharmacyMappedRows]);
-  wsPharmacy["!cols"] = rawCols;
-  XLSX.utils.book_append_sheet(wb, wsPharmacy, "PHARMACY (source)");
-
   const wsDup = XLSX.utils.aoa_to_sheet([DUPLICATE_LOG_HEADERS, ...duplicateLogRows]);
   wsDup["!cols"] = [...rawCols, { wch: 46 }];
-  XLSX.utils.book_append_sheet(wb, wsDup, "DUPLICATES REMOVED");
+  XLSX.utils.book_append_sheet(wb, wsDup, "DUPLICATE LOG");
+
+  if (dischargeReviewRows && dischargeReviewRows.length > 0) {
+    const wsReview = XLSX.utils.aoa_to_sheet([[...BILL_NEEDED_HEADERS, "Note"], ...dischargeReviewRows]);
+    wsReview["!cols"] = [...rawCols, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, wsReview, "DISCHARGE TO REVIEW");
+  }
 
   return wb;
 }
