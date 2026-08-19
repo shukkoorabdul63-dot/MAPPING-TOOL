@@ -92,9 +92,14 @@ export function IpCreditView({ state, setState }) {
               <span className="pill amber">Review</span>
               <p>
                 {stats.flaggedCount} row{stats.flaggedCount === 1 ? "" : "s"} (₹{fmt(stats.flaggedAmount)})
-                had a Settled Bill No. even though IP Clear was not "Y" — a
-                data issue in the Teja export. These are excluded from the
-                Discharge credit deduction. Verify in Teja and re-export.
+                across this whole report had a Settled Bill No. even though
+                IP Clear was not "Y" — a data issue in the Teja export. None
+                of these are ever booked as credit, no matter which Discharge
+                file you upload. Some may reference bills from earlier
+                periods that aren't in your current Discharge upload at all —
+                the Bills tab will show only the ones that actually match a
+                bill in what you've uploaded there. Verify the full list in
+                Teja and re-export.
               </p>
             </div>
           )}

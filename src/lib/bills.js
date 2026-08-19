@@ -161,9 +161,21 @@ export function parseBillsWorkbook(workbook) {
  * Map parsed candidates into the SALES journals for Others, Pharmacy, and
  * Discharge. Takes an optional `ipCreditMap` (settled bill no → total
  * credit) — when present, Discharge income is reduced by the mapped amount.
+ * `ipCreditFlaggedRows` (IP Clear != "Y" rows that still carry a Settled
+ * Bill No.) is cross-referenced against the Discharge bills actually in
+ * this upload — the IP Credit report can carry stale references to bills
+ * from earlier periods that aren't part of this batch at all, so only the
+ * ones matching a Discharge bill no. here are surfaced as relevant.
  */
-export function mapBills(parsed, ipCreditMap = new Map()) {
+export function mapBills(parsed, ipCreditMap = new Map(), ipCreditFlaggedRows = []) {
   const { candidates, scannedDataRows } = parsed;
+
+  const flaggedBySettled = new Map();
+  for (const r of ipCreditFlaggedRows) {
+    if (!r.settledBillNo) continue;
+    if (!flaggedBySettled.has(r.settledBillNo)) flaggedBySettled.set(r.settledBillNo, []);
+    flaggedBySettled.get(r.settledBillNo).push(r);
+  }
 
   // Step 1: drop cancelled
   let cancelledCount = 0;
@@ -223,6 +235,8 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
   let dischargeMatched = 0;
   let dischargeUnmatched = 0;
   let dischargeIpCreditApplied = 0;
+  const dischargeIpCreditFlaggedRows = [];
+  const dischargeIpCreditFlaggedBills = new Set();
 
   for (const c of clean) {
     if (!grossByBillName.has(c.billName)) {
@@ -243,6 +257,12 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
         dischargeIpCreditApplied += ipCredit;
       } else {
         dischargeUnmatched++;
+      }
+
+      const flaggedForThisBill = flaggedBySettled.get(c.billNo);
+      if (flaggedForThisBill && !dischargeIpCreditFlaggedBills.has(c.billNo)) {
+        dischargeIpCreditFlaggedBills.add(c.billNo);
+        dischargeIpCreditFlaggedRows.push(...flaggedForThisBill);
       }
 
       const income = c.grossAmount - ipCredit;
@@ -329,6 +349,7 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
     dischargeBuckets,
     duplicateLogRows,
     dischargeReviewRows,
+    dischargeIpCreditFlaggedRows,
     billGrossByName,
     // Also expose the parsed clean rows so the master patient list can use them.
     cleanCandidates: clean,
@@ -352,6 +373,8 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
       dischargeUnmatched,
       dischargeIpCreditApplied,
       dischargeReviewCount: dischargeReviewRows.length,
+      dischargeIpCreditFlaggedCount: dischargeIpCreditFlaggedBills.size,
+      dischargeIpCreditFlaggedAmount: dischargeIpCreditFlaggedRows.reduce((a, r) => a + r.creditAmount, 0),
       othersOutputRows: salesOthersRows.length,
       pharmacyOutputRows: salesPharmacyRows.length,
       dischargeOutputRows: salesDischargeRows.length,
@@ -359,13 +382,14 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
   };
 }
 
-export function buildBillsOutputWorkbook(result, ledgerNames, ipCreditFlaggedRows = []) {
+export function buildBillsOutputWorkbook(result, ledgerNames) {
   const {
     othersBuckets,
     pharmacyBuckets,
     dischargeBuckets,
     duplicateLogRows,
     dischargeReviewRows,
+    dischargeIpCreditFlaggedRows,
   } = result;
   const wb = XLSX.utils.book_new();
 
@@ -408,10 +432,10 @@ export function buildBillsOutputWorkbook(result, ledgerNames, ipCreditFlaggedRow
     XLSX.utils.book_append_sheet(wb, wsReview, "DISCHARGE TO REVIEW");
   }
 
-  if (ipCreditFlaggedRows && ipCreditFlaggedRows.length > 0) {
+  if (dischargeIpCreditFlaggedRows && dischargeIpCreditFlaggedRows.length > 0) {
     const wsIpFlagged = XLSX.utils.aoa_to_sheet([
       IP_CREDIT_FLAGGED_HEADERS,
-      ...ipCreditFlaggedRowsToAOA(ipCreditFlaggedRows),
+      ...ipCreditFlaggedRowsToAOA(dischargeIpCreditFlaggedRows),
     ]);
     wsIpFlagged["!cols"] = [
       { wch: 18 },

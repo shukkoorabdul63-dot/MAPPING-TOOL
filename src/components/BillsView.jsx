@@ -48,12 +48,12 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult }) {
   // parse pass isn't re-run.
   const result = useMemo(() => {
     if (!parsed) return null;
-    return mapBills(parsed, ipCreditResult?.creditBySettled || new Map());
+    return mapBills(parsed, ipCreditResult?.creditBySettled || new Map(), ipCreditResult?.flaggedRows || []);
   }, [parsed, ipCreditResult]);
 
   const download = () => {
     if (!result) return;
-    const wb = buildBillsOutputWorkbook(result, ledgerNames, ipCreditResult?.flaggedRows || []);
+    const wb = buildBillsOutputWorkbook(result, ledgerNames);
     const base = (fileName || "teja_bills").replace(/\.[^/.]+$/, "");
     downloadWorkbook(wb, `${base}_TALLY_MAPPED.xlsx`);
   };
@@ -152,6 +152,20 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult }) {
                   Discharge income is currently posted as full Gross Amount.
                   Upload the IP Credit report on its own tab and the numbers
                   update here automatically — no need to re-upload bills.
+                </p>
+              </div>
+            )}
+
+            {stats.dischargeIpCreditFlaggedCount > 0 && (
+              <div className="note">
+                <span className="pill amber">Review</span>
+                <p>
+                  {stats.dischargeIpCreditFlaggedCount} Discharge bill
+                  {stats.dischargeIpCreditFlaggedCount === 1 ? "" : "s"} in this upload{" "}
+                  {stats.dischargeIpCreditFlaggedCount === 1 ? "has" : "have"} an IP Credit row with a
+                  Settled Bill No. even though IP Clear wasn't "Y" (₹{fmt(stats.dischargeIpCreditFlaggedAmount)}
+                  {" "}excluded from the credit applied above). Full list on the "IP CREDIT FLAGGED" sheet
+                  in the download — verify in Teja.
                 </p>
               </div>
             )}
