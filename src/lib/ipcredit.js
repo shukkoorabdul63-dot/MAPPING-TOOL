@@ -70,9 +70,11 @@ export function processIpCreditWorkbook(workbook) {
   // that isn't a serial number). Any row with a non-empty Bill No is data.
   const creditBySettled = new Map();
   const allRows = [];
+  const flaggedRows = [];
   let dataRows = 0;
   let unsettledCount = 0;
   let unsettledAmount = 0;
+  let flaggedAmount = 0;
   let currentSection = "";
 
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
@@ -108,10 +110,20 @@ export function processIpCreditWorkbook(workbook) {
     allRows.push(rowData);
 
     if (rowData.settledBillNo) {
-      creditBySettled.set(
-        rowData.settledBillNo,
-        (creditBySettled.get(rowData.settledBillNo) || 0) + rowData.creditAmount
-      );
+      // Teja's export sometimes carries a Settled Bill No. on a row whose
+      // IP Clear flag is still "N" (the bill got referenced before the
+      // credit was actually cleared). Only a "Y" row is a real settlement —
+      // anything else is a data anomaly that must NOT reduce a Discharge
+      // bill's income, so it's flagged for review instead of booked.
+      if (rowData.ipClear === "Y") {
+        creditBySettled.set(
+          rowData.settledBillNo,
+          (creditBySettled.get(rowData.settledBillNo) || 0) + rowData.creditAmount
+        );
+      } else {
+        flaggedRows.push(rowData);
+        flaggedAmount += rowData.creditAmount;
+      }
     } else {
       unsettledCount++;
       unsettledAmount += rowData.creditAmount;
@@ -123,12 +135,15 @@ export function processIpCreditWorkbook(workbook) {
   return {
     creditBySettled,
     allRows,
+    flaggedRows,
     stats: {
       dataRows,
-      settledCount: dataRows - unsettledCount,
+      settledCount: dataRows - unsettledCount - flaggedRows.length,
       settledAmount: settledTotal,
       unsettledCount,
       unsettledAmount,
+      flaggedCount: flaggedRows.length,
+      flaggedAmount,
       uniqueSettledBills: creditBySettled.size,
     },
   };

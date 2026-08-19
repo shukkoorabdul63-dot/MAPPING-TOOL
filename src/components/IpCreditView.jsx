@@ -79,6 +79,18 @@ export function IpCreditView({ state, setState }) {
           <StatRow label="Rows without a settled bill number" value={stats.unsettledCount.toLocaleString()} />
           <StatRow label="Total credit still open (unsettled)" value={fmt(stats.unsettledAmount)} />
 
+          {stats.flaggedCount > 0 && (
+            <div className="note">
+              <span className="pill amber">Review</span>
+              <p>
+                {stats.flaggedCount} row{stats.flaggedCount === 1 ? "" : "s"} (₹{fmt(stats.flaggedAmount)})
+                had a Settled Bill No. even though IP Clear was not "Y" — a
+                data issue in the Teja export. These are excluded from the
+                Discharge credit deduction. Verify in Teja and re-export.
+              </p>
+            </div>
+          )}
+
           <div className="note">
             <span className="pill teal">Feeds Bills</span>
             <p>
@@ -93,6 +105,45 @@ export function IpCreditView({ state, setState }) {
               Start over
             </Button>
           </div>
+        </section>
+      )}
+
+      {status === "done" && result?.flaggedRows?.length > 0 && (
+        <section className="card">
+          <h2 className="card-title">Flagged — IP Clear is not "Y" but a Settled Bill No. is present</h2>
+          <div className="table-wrap">
+            <table className="preview">
+              <thead>
+                <tr>
+                  <th>Bill No</th>
+                  <th>Bill Date</th>
+                  <th>Patient Name</th>
+                  <th>Credit Amt</th>
+                  <th>IP Clear</th>
+                  <th>Settled Bill No</th>
+                  <th>Settled Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.flaggedRows.slice(0, 100).map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.billNo}</td>
+                    <td>{r.billDate}</td>
+                    <td>{r.patientName}</td>
+                    <td className="mono">{fmt(r.creditAmount)}</td>
+                    <td>{r.ipClear}</td>
+                    <td>{r.settledBillNo}</td>
+                    <td>{r.settledDate}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {result.flaggedRows.length > 100 && (
+            <p className="preview-note">
+              Showing the first 100 of {result.flaggedRows.length.toLocaleString()} flagged rows.
+            </p>
+          )}
         </section>
       )}
     </div>
