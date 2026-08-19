@@ -1,6 +1,7 @@
 import React, { useCallback } from "react";
 import * as XLSX from "xlsx";
-import { processIpCreditWorkbook } from "../lib/ipcredit.js";
+import { processIpCreditWorkbook, buildIpCreditFlaggedWorkbook } from "../lib/ipcredit.js";
+import { downloadWorkbook } from "../lib/utils.js";
 import { StatRow, Button, StatusRow, Dropzone } from "./shared.jsx";
 
 const STATUS_LABELS = {
@@ -41,6 +42,13 @@ export function IpCreditView({ state, setState }) {
 
   const reset = () =>
     patch({ fileName: null, status: "idle", error: null, result: null });
+
+  const downloadFlagged = () => {
+    if (!result?.flaggedRows?.length) return;
+    const wb = buildIpCreditFlaggedWorkbook(result);
+    const base = (fileName || "teja_ipcredit").replace(/\.[^/.]+$/, "");
+    downloadWorkbook(wb, `${base}_FLAGGED.xlsx`);
+  };
 
   const stats = result?.stats;
 
@@ -144,6 +152,11 @@ export function IpCreditView({ state, setState }) {
               Showing the first 100 of {result.flaggedRows.length.toLocaleString()} flagged rows.
             </p>
           )}
+          <div className="btn-row">
+            <Button variant="ghost" onClick={downloadFlagged}>
+              Download flagged rows
+            </Button>
+          </div>
         </section>
       )}
     </div>

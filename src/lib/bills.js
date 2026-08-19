@@ -14,6 +14,7 @@ import {
   pushToBucket,
   bucketSheetName,
 } from "./tokens.js";
+import { IP_CREDIT_FLAGGED_HEADERS, ipCreditFlaggedRowsToAOA } from "./ipcredit.js";
 
 export const SALES_HEADERS = [
   "Voucher Type",
@@ -358,7 +359,7 @@ export function mapBills(parsed, ipCreditMap = new Map()) {
   };
 }
 
-export function buildBillsOutputWorkbook(result, ledgerNames) {
+export function buildBillsOutputWorkbook(result, ledgerNames, ipCreditFlaggedRows = []) {
   const {
     othersBuckets,
     pharmacyBuckets,
@@ -405,6 +406,25 @@ export function buildBillsOutputWorkbook(result, ledgerNames) {
     const wsReview = XLSX.utils.aoa_to_sheet([[...BILL_NEEDED_HEADERS, "Note"], ...dischargeReviewRows]);
     wsReview["!cols"] = [...rawCols, { wch: 60 }];
     XLSX.utils.book_append_sheet(wb, wsReview, "DISCHARGE TO REVIEW");
+  }
+
+  if (ipCreditFlaggedRows && ipCreditFlaggedRows.length > 0) {
+    const wsIpFlagged = XLSX.utils.aoa_to_sheet([
+      IP_CREDIT_FLAGGED_HEADERS,
+      ...ipCreditFlaggedRowsToAOA(ipCreditFlaggedRows),
+    ]);
+    wsIpFlagged["!cols"] = [
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 26 },
+      { wch: 12 },
+      { wch: 9 },
+      { wch: 16 },
+      { wch: 12 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsIpFlagged, "IP CREDIT FLAGGED");
   }
 
   return wb;

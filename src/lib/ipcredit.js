@@ -148,3 +148,47 @@ export function processIpCreditWorkbook(workbook) {
     },
   };
 }
+
+export const IP_CREDIT_FLAGGED_HEADERS = [
+  "Section",
+  "Bill No",
+  "Bill Date",
+  "IP No",
+  "Patient Name",
+  "Credit Amt",
+  "IP Clear",
+  "Settled Bill No",
+  "Settled Date",
+];
+
+export function ipCreditFlaggedRowsToAOA(flaggedRows) {
+  return flaggedRows.map((r) => [
+    r.section,
+    r.billNo,
+    r.billDate,
+    r.ipNo,
+    r.patientName,
+    r.creditAmount,
+    r.ipClear,
+    r.settledBillNo,
+    r.settledDate,
+  ]);
+}
+
+export function buildIpCreditFlaggedWorkbook(result) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([IP_CREDIT_FLAGGED_HEADERS, ...ipCreditFlaggedRowsToAOA(result.flaggedRows)]);
+  ws["!cols"] = [
+    { wch: 18 },
+    { wch: 14 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 26 },
+    { wch: 12 },
+    { wch: 9 },
+    { wch: 16 },
+    { wch: 12 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, "FLAGGED");
+  return wb;
+}

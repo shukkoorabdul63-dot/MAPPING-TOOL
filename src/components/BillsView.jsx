@@ -53,7 +53,7 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult }) {
 
   const download = () => {
     if (!result) return;
-    const wb = buildBillsOutputWorkbook(result, ledgerNames);
+    const wb = buildBillsOutputWorkbook(result, ledgerNames, ipCreditResult?.flaggedRows || []);
     const base = (fileName || "teja_bills").replace(/\.[^/.]+$/, "");
     downloadWorkbook(wb, `${base}_TALLY_MAPPED.xlsx`);
   };
