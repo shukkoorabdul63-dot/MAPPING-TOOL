@@ -40,6 +40,10 @@ export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames }) {
             (e.g. "RECEIPT (2)") — the Voucher Type name stays the same, so
             there's nothing to configure for that.
           </p>
+          <p className="lede small">
+            Saved automatically on this device — these stay filled in even
+            after you close the tab, until you reset them below.
+          </p>
 
           <div className="drawer-section noborder">
             <h3>Payment mode ledgers (Receipts)</h3>
@@ -107,7 +111,19 @@ export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames }) {
         </div>
 
         <div className="drawer-foot">
-          <Button variant="primary" onClick={onClose}>Done</Button>
+          <div className="btn-row">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (confirm("Reset all ledger and voucher names back to their defaults?")) {
+                  setLedgerNames(DEFAULT_LEDGER_NAMES);
+                }
+              }}
+            >
+              Reset to defaults
+            </Button>
+            <Button variant="primary" onClick={onClose}>Done</Button>
+          </div>
         </div>
       </div>
     </>

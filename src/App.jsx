@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { WorkingsPanel } from "./components/WorkingsPanel.jsx";
 import { HomeView } from "./components/HomeView.jsx";
@@ -34,10 +34,33 @@ const EMPTY_IPCREDIT_STATE = {
   result: null,
 };
 
+// Settings (ledger & voucher names) persist in localStorage so they survive
+// closing the tab — until the user resets them from the Settings panel.
+const LEDGER_NAMES_STORAGE_KEY = "finova-mapping-tool:ledgerNames";
+
+function loadStoredLedgerNames() {
+  try {
+    const raw = localStorage.getItem(LEDGER_NAMES_STORAGE_KEY);
+    if (!raw) return DEFAULT_LEDGER_NAMES;
+    return { ...DEFAULT_LEDGER_NAMES, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_LEDGER_NAMES;
+  }
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState("home");
   const [workingsOpen, setWorkingsOpen] = useState(false);
-  const [ledgerNames, setLedgerNames] = useState(DEFAULT_LEDGER_NAMES);
+  const [ledgerNames, setLedgerNames] = useState(loadStoredLedgerNames);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LEDGER_NAMES_STORAGE_KEY, JSON.stringify(ledgerNames));
+    } catch {
+      // localStorage unavailable (private browsing, quota, etc.) — settings
+      // just won't persist across tab closes.
+    }
+  }, [ledgerNames]);
   const [receiptsState, setReceiptsState] = useState(EMPTY_VIEW_STATE);
   const [billsState, setBillsState] = useState(EMPTY_BILLS_STATE);
   const [ipCreditState, setIpCreditState] = useState(EMPTY_IPCREDIT_STATE);
