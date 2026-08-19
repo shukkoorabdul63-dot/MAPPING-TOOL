@@ -110,25 +110,44 @@ export function processDialysisWorkbook(workbook) {
   let skippedZeroPending = 0;
   let totalReceivable = 0;
 
-  const isSectionHeader = (row) => {
-    const c1 = row[1];
-    if (typeof c1 !== "string" || c1.trim() === "") return false;
-    if (String(c1).trim().toLowerCase().startsWith("total")) return false;
-    const rest = row.filter((v, i) => i !== 1 && v != null && v !== "");
-    return rest.length === 0;
+  // A section header row (e.g. "DIALYSIS", "PHARMACY", "CASUALTY") has
+  // exactly one non-empty cell — a string label — with everything else
+  // blank. Which column carries that label varies between Teja report
+  // layouts (an extra leading spacer column has shown up in some exports),
+  // so scan for it instead of assuming a fixed index. Returns the label, or
+  // null if this isn't a section header row.
+  //
+  // A "date-only" row (just the running date in one cell, rest blank — see
+  // below) has the exact same one-cell shape, so a date-formatted label is
+  // excluded here and left for the date-only branch to handle instead.
+  const isDateLikeLabel = (s) => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s);
+  const sectionHeaderLabel = (row) => {
+    let labelIdx = -1;
+    for (let i = 0; i < row.length; i++) {
+      const v = row[i];
+      if (v == null || v === "") continue;
+      if (labelIdx !== -1) return null;
+      if (typeof v !== "string") return null;
+      labelIdx = i;
+    }
+    if (labelIdx === -1) return null;
+    const label = row[labelIdx].trim();
+    if (label === "" || label.toLowerCase().startsWith("total") || isDateLikeLabel(label)) return null;
+    return label;
   };
 
-  const isFooterRow = (row) => {
-    const c6 = row[6];
-    return typeof c6 === "string" && String(c6).trim().toLowerCase().startsWith("total");
-  };
+  // Footer row: "Total     :" appears in some column alongside the
+  // section's totals. Same reasoning — scan instead of a fixed index.
+  const isFooterRow = (row) =>
+    row.some((v) => typeof v === "string" && v.trim().toLowerCase().startsWith("total"));
 
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row) continue;
 
-    if (isSectionHeader(row)) {
-      currentSection = String(row[1]).trim();
+    const sectionLabel = sectionHeaderLabel(row);
+    if (sectionLabel !== null) {
+      currentSection = sectionLabel;
       continue;
     }
     if (isFooterRow(row)) continue;
