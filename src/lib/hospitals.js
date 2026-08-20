@@ -39,11 +39,26 @@ export function loadHospitalProfiles() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.hospitals && Object.keys(parsed.hospitals).length > 0) return parsed;
+      if (parsed && parsed.hospitals && Object.keys(parsed.hospitals).length > 0) {
+        // Top-up: earlier migrations from the legacy single-profile key
+        // only created hospA, leaving upgrading users without a Hospital B
+        // pill to click. If B still isn't there, seed it — never touch A.
+        if (!parsed.hospitals.hospB) {
+          parsed.hospitals.hospB = makeHospital(
+            "hospB",
+            "Hospital B",
+            "HOSPB",
+            BILL_MAPPING_MODES.PER_BILL_NAME
+          );
+        }
+        return parsed;
+      }
     }
 
     // Migrate the single-profile key from before hospital profiles existed.
     // The legacy key is intentionally left in place, untouched, as a safety net.
+    // Hospital B is seeded alongside so the switcher UI always has both
+    // pills to pick from — otherwise upgrading users would only see one.
     const legacyRaw = localStorage.getItem(LEGACY_LEDGER_NAMES_KEY);
     if (legacyRaw) {
       const legacyLedgerNames = JSON.parse(legacyRaw);
@@ -55,6 +70,7 @@ export function loadHospitalProfiles() {
             ...makeHospital("hospA", "Hospital A", "HOSPA", BILL_MAPPING_MODES.FIXED),
             ledgerNames: { ...DEFAULT_LEDGER_NAMES, ...legacyLedgerNames },
           },
+          hospB: makeHospital("hospB", "Hospital B", "HOSPB", BILL_MAPPING_MODES.PER_BILL_NAME),
         },
       };
     }
