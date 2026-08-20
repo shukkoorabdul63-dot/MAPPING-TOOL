@@ -34,9 +34,10 @@ export function Sidebar({
   hospitals,
   activeHospitalId,
   onSwitchHospital,
-  onAddHospital,
+  onRemoveHospital,
 }) {
   const hospitalList = hospitals ? Object.values(hospitals) : [];
+  const canRemove = hospitalList.length > 1;
 
   return (
     <aside className="sidebar">
@@ -55,21 +56,33 @@ export function Sidebar({
       {hospitalList.length > 0 && (
         <div className="hospital-switcher">
           {hospitalList.map((h, i) => (
-            <button
+            <span
               key={h.id}
-              type="button"
-              className={`hospital-pill ${HOSPITAL_COLORS[i % HOSPITAL_COLORS.length]}${
-                h.id === activeHospitalId ? " active" : ""
-              }`}
-              onClick={() => onSwitchHospital(h.id)}
-              title={h.name}
+              className={`hospital-pill-group${h.id === activeHospitalId ? " active" : ""}`}
             >
-              {h.name}
-            </button>
+              <button
+                type="button"
+                className={`hospital-pill ${HOSPITAL_COLORS[i % HOSPITAL_COLORS.length]}${
+                  h.id === activeHospitalId ? " active" : ""
+                }`}
+                onClick={() => onSwitchHospital(h.id)}
+                title={h.name}
+              >
+                {h.name}
+              </button>
+              {canRemove && (
+                <button
+                  type="button"
+                  className="hospital-pill-remove"
+                  onClick={() => onRemoveHospital(h.id)}
+                  title={`Remove ${h.name}`}
+                  aria-label={`Remove ${h.name}`}
+                >
+                  ×
+                </button>
+              )}
+            </span>
           ))}
-          <button type="button" className="hospital-pill add" onClick={onAddHospital}>
-            + Add
-          </button>
         </div>
       )}
 

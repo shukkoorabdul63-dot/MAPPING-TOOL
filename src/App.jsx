@@ -15,7 +15,7 @@ import {
   getActiveHospital,
   withUpdatedLedgerNames,
   withActiveHospital,
-  withNewHospital,
+  withRemovedHospital,
   BILL_MAPPING_MODES,
 } from "./lib/hospitals.js";
 import "./styles.css";
@@ -95,21 +95,12 @@ export default function App() {
     setHospitalProfiles((profiles) => withActiveHospital(profiles, hospitalId));
   };
 
-  const onAddHospital = () => {
-    const name = prompt("New hospital name?");
-    if (!name || !name.trim()) return;
-    const shortCode = (prompt("Short code (for reference, e.g. 3-6 letters)?", "") || "").trim().toUpperCase();
-    const usePerBillName = confirm(
-      "Should Voucher Type and discount ledgers be derived per bill name (one sheet per Bill Name, e.g. \"PHARMACY CASH BILL\", \"Discount - X-RAY BILL\")?\n\nOK = yes, per bill name. Cancel = no, use the standard Others/Pharmacy/Discharge categories with configurable names (like Hospital A)."
-    );
-    setHospitalProfiles((profiles) =>
-      withNewHospital(
-        profiles,
-        name.trim(),
-        shortCode,
-        usePerBillName ? BILL_MAPPING_MODES.PER_BILL_NAME : BILL_MAPPING_MODES.FIXED
-      )
-    );
+  const onRemoveHospital = (hospitalId) => {
+    const target = hospitalProfiles.hospitals[hospitalId];
+    if (!target) return;
+    if (Object.keys(hospitalProfiles.hospitals).length <= 1) return;
+    if (!confirm(`Remove "${target.name}"? Its saved ledger names and settings will be discarded.`)) return;
+    setHospitalProfiles((profiles) => withRemovedHospital(profiles, hospitalId));
   };
 
   // Bills result is derived — recomputed whenever parsed bills or IP credit
@@ -144,7 +135,7 @@ export default function App() {
         hospitals={hospitalProfiles.hospitals}
         activeHospitalId={hospitalProfiles.activeHospitalId}
         onSwitchHospital={onSwitchHospital}
-        onAddHospital={onAddHospital}
+        onRemoveHospital={onRemoveHospital}
       />
       {!activeHospital ? (
         <main className="workspace">
@@ -152,8 +143,8 @@ export default function App() {
             <header className="view-head">
               <h1>Select a hospital to continue</h1>
               <p className="lede">
-                Add a hospital from the sidebar to set up its ledger names and
-                bill categorization before processing any files.
+                All hospitals were removed. Reload the page to restore the
+                default Hospital A / Hospital B setup.
               </p>
             </header>
           </div>
