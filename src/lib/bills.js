@@ -166,8 +166,25 @@ export function parseBillsWorkbook(workbook) {
  * this upload — the IP Credit report can carry stale references to bills
  * from earlier periods that aren't part of this batch at all, so only the
  * ones matching a Discharge bill no. here are surfaced as relevant.
+ *
+ * `billMappingMode`:
+ *  - "fixed" (default): existing 3-bucket behavior — Others / Pharmacy /
+ *    Discharge, voucher type + discount ledger come from ledgerNames.
+ *  - "per-bill-name": each distinct BILLNAME gets its own sheet; voucher
+ *    type is the bill name verbatim, discount ledger is
+ *    "Discount - {bill name}" verbatim. GST split is triggered by
+ *    VAT Amount > 0 on the row (not by category name), and
+ *    Discharge-IP-credit treatment is triggered by any bill name
+ *    containing "discharge".
  */
-export function mapBills(parsed, ipCreditMap = new Map(), ipCreditFlaggedRows = []) {
+export function mapBills(parsed, ipCreditMap = new Map(), ipCreditFlaggedRows = [], billMappingMode = "fixed") {
+  if (billMappingMode === "per-bill-name") {
+    return mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows);
+  }
+  return mapBillsFixed(parsed, ipCreditMap, ipCreditFlaggedRows);
+}
+
+function mapBillsFixed(parsed, ipCreditMap, ipCreditFlaggedRows) {
   const { candidates, scannedDataRows } = parsed;
 
   const flaggedBySettled = new Map();
@@ -341,6 +358,7 @@ export function mapBills(parsed, ipCreditMap = new Map(), ipCreditFlaggedRows = 
   const billGrossByName = [...grossByBillName.values()].sort((a, b) => b.grossAmount - a.grossAmount);
 
   return {
+    mode: "fixed",
     salesOthersRows,
     salesPharmacyRows,
     salesDischargeRows,
@@ -382,6 +400,219 @@ export function mapBills(parsed, ipCreditMap = new Map(), ipCreditFlaggedRows = 
   };
 }
 
+// Per-bill-name mode: each distinct BILLNAME gets its own bucket/sheet.
+// Voucher Type in the output is the bill name itself (verbatim, no
+// ledgerNames indirection); discount ledger is "Discount - {bill name}"
+// (verbatim). GST split fires whenever VAT Amount > 0 on a row (works
+// regardless of category name — e.g. an Opticals row that carries VAT gets
+// the split too). Discharge IP-credit treatment fires when the bill name
+// contains "discharge" (workflow signal, cross-references the same IP
+// Credit report as fixed mode).
+function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
+  const { candidates, scannedDataRows } = parsed;
+
+  const flaggedBySettled = new Map();
+  for (const r of ipCreditFlaggedRows) {
+    if (!r.settledBillNo) continue;
+    if (!flaggedBySettled.has(r.settledBillNo)) flaggedBySettled.set(r.settledBillNo, []);
+    flaggedBySettled.get(r.settledBillNo).push(r);
+  }
+
+  let cancelledCount = 0;
+  const notCancelled = [];
+  for (const c of candidates) {
+    if (c.billCancelled.toUpperCase() === "Y") {
+      cancelledCount++;
+      continue;
+    }
+    notCancelled.push(c);
+  }
+
+  const seenGroups = new Set();
+  const duplicateLogRows = [];
+  let duplicateRowCount = 0;
+  const seenGroupsForCount = new Set();
+  let duplicateGroupCount = 0;
+  const clean = [];
+  for (const c of notCancelled) {
+    const k = `${c.billNo}||${c.billName}`;
+    if (seenGroups.has(k)) {
+      duplicateRowCount++;
+      if (!seenGroupsForCount.has(k)) {
+        seenGroupsForCount.add(k);
+        duplicateGroupCount++;
+      }
+      duplicateLogRows.push([...rawRow(c), "Duplicate Bill No. + Bill Name — kept first, dropped this"]);
+      continue;
+    }
+    seenGroups.add(k);
+    clean.push(c);
+  }
+
+  // billName → { rows, seen (Map<billNo, count>), buckets }
+  const byBillName = new Map();
+  const ensureGroup = (billName) => {
+    let g = byBillName.get(billName);
+    if (!g) {
+      g = { rows: [], seen: new Map(), buckets: [] };
+      byBillName.set(billName, g);
+    }
+    return g;
+  };
+
+  const grossByBillName = new Map();
+  const dischargeReviewRows = [];
+
+  let pharmacyTaxable = 0;
+  let pharmacyExempt = 0;
+  let totalCgst = 0;
+  let totalSgst = 0;
+  let dischargeMatched = 0;
+  let dischargeUnmatched = 0;
+  let dischargeIpCreditApplied = 0;
+  const dischargeIpCreditFlaggedRows = [];
+  const dischargeIpCreditFlaggedBills = new Set();
+
+  for (const c of clean) {
+    if (!grossByBillName.has(c.billName)) {
+      grossByBillName.set(c.billName, { billName: c.billName, grossAmount: 0, count: 0 });
+    }
+    const gEntry = grossByBillName.get(c.billName);
+    gEntry.grossAmount += c.grossAmount;
+    gEntry.count += 1;
+
+    const nameLower = c.billName.toLowerCase();
+    const party = `${c.opNumber} - ${c.patientName}`;
+    const incomeHead = `${c.billName} INCOME-${c.ipop}`;
+    const voucherType = c.billName; // verbatim, per user requirement
+    const discountLedger = `Discount - ${c.billName}`; // verbatim, per user requirement
+
+    const isDischarge = nameLower.includes("discharge");
+    const isTaxable = !isDischarge && c.vatAmount > 0;
+
+    let rows;
+    if (isDischarge) {
+      const ipCredit = ipCreditMap.get(c.billNo) || 0;
+      if (ipCredit > 0) {
+        dischargeMatched++;
+        dischargeIpCreditApplied += ipCredit;
+      } else {
+        dischargeUnmatched++;
+      }
+
+      const flaggedForThisBill = flaggedBySettled.get(c.billNo);
+      if (flaggedForThisBill && !dischargeIpCreditFlaggedBills.has(c.billNo)) {
+        dischargeIpCreditFlaggedBills.add(c.billNo);
+        dischargeIpCreditFlaggedRows.push(...flaggedForThisBill);
+      }
+
+      const income = c.grossAmount - ipCredit;
+      const drParty = income - c.billDiscount;
+
+      if (income < -0.01) {
+        dischargeReviewRows.push([
+          ...rawRow(c),
+          `Gross ₹${c.grossAmount.toFixed(2)} − IP credit ₹${ipCredit.toFixed(2)} = ₹${income.toFixed(2)} (negative). Review — likely stale or over-applied IP credit.`,
+        ]);
+      }
+
+      rows = [[voucherType, c.date, c.billNo, party, drParty, "DR", null, null]];
+      if (c.billDiscount > 0) {
+        rows.push([voucherType, c.date, c.billNo, discountLedger, c.billDiscount, "DR", null, null]);
+      }
+      rows.push([voucherType, c.date, c.billNo, incomeHead, income, "CR", null, c.doctorCode]);
+    } else if (isTaxable) {
+      pharmacyTaxable++;
+      const taxableValue = c.grossAmount - c.vatAmount;
+      const cgst = c.vatAmount / 2;
+      const sgst = c.vatAmount / 2;
+      totalCgst += cgst;
+      totalSgst += sgst;
+      const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
+
+      rows = [[voucherType, c.date, c.billNo, party, drAmount, "DR", null, null]];
+      if (c.billDiscount > 0) {
+        rows.push([voucherType, c.date, c.billNo, discountLedger, c.billDiscount, "DR", null, null]);
+      }
+      rows.push([voucherType, c.date, c.billNo, incomeHead, taxableValue, "CR", null, c.doctorCode]);
+      rows.push([voucherType, c.date, c.billNo, CGST_TOKEN, cgst, "CR", null, null]);
+      rows.push([voucherType, c.date, c.billNo, SGST_TOKEN, sgst, "CR", null, null]);
+    } else {
+      if (nameLower.includes("pharmacy")) pharmacyExempt++;
+      const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
+      rows = [
+        [voucherType, c.date, c.billNo, party, drAmount, "DR", null, null],
+        [voucherType, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode],
+      ];
+      if (c.billDiscount > 0) {
+        rows.push([voucherType, c.date, c.billNo, discountLedger, c.billDiscount, "DR", null, null]);
+      }
+    }
+
+    const group = ensureGroup(c.billName);
+    group.rows.push(...rows);
+    const occIdx = nextOccurrence(group.seen, c.billNo);
+    pushToBucket(group.buckets, occIdx, rows);
+  }
+
+  const billGrossByName = [...grossByBillName.values()].sort((a, b) => b.grossAmount - a.grossAmount);
+  const perBillNameStats = [...byBillName.entries()].map(([billName, g]) => ({
+    billName,
+    bills: g.seen.size,
+    outputRows: g.rows.length,
+    sheetCount: g.buckets.length,
+  }));
+
+  return {
+    mode: "per-bill-name",
+    byBillName, // Map<billName, { rows, seen, buckets }>
+    duplicateLogRows,
+    dischargeReviewRows,
+    dischargeIpCreditFlaggedRows,
+    billGrossByName,
+    cleanCandidates: clean,
+    // Empty legacy arrays so downstream views that read them under fixed mode
+    // don't crash if this result ever reaches them; UI checks `mode` to
+    // decide which shape to render.
+    salesOthersRows: [],
+    salesPharmacyRows: [],
+    salesDischargeRows: [],
+    othersBuckets: [],
+    pharmacyBuckets: [],
+    dischargeBuckets: [],
+    stats: {
+      scannedDataRows,
+      cancelledCount,
+      duplicateGroupCount,
+      duplicateRowCount,
+      cleanRows: clean.length,
+      pharmacyTaxable,
+      pharmacyExempt,
+      totalCgst,
+      totalSgst,
+      dischargeMatched,
+      dischargeUnmatched,
+      dischargeIpCreditApplied,
+      dischargeReviewCount: dischargeReviewRows.length,
+      dischargeIpCreditFlaggedCount: dischargeIpCreditFlaggedBills.size,
+      dischargeIpCreditFlaggedAmount: dischargeIpCreditFlaggedRows.reduce((a, r) => a + r.creditAmount, 0),
+      perBillNameStats,
+      dischargeCount: perBillNameStats
+        .filter((s) => s.billName.toLowerCase().includes("discharge"))
+        .reduce((a, s) => a + s.bills, 0),
+    },
+  };
+}
+
+// Excel sheet names cap at 31 chars and disallow \ / ? * [ ] : — sanitize
+// bill-name-derived sheet base names to that. The bucketSheetName helper
+// then appends " (2)" etc. for repeat occurrences within the same base;
+// leave room for that suffix by capping the base at 26 chars.
+function sanitizeSheetBase(base) {
+  const cleaned = String(base).replace(/[\\/?*\[\]:]+/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned.length > 26 ? cleaned.slice(0, 26).trim() : cleaned;
+}
+
 export function buildBillsOutputWorkbook(result, ledgerNames) {
   const {
     othersBuckets,
@@ -414,9 +645,19 @@ export function buildBillsOutputWorkbook(result, ledgerNames) {
     });
   };
 
-  addBucketedSheets(othersBuckets, "SALES - OTHERS");
-  addBucketedSheets(pharmacyBuckets, "SALES - PHARMACY");
-  addBucketedSheets(dischargeBuckets, "SALES - DISCHARGE");
+  if (result.mode === "per-bill-name") {
+    // One SALES sheet per bill name — voucher type and discount ledger are
+    // already the literal bill-name-derived strings, so no ledgerNames
+    // indirection needed for those cells (CGST/SGST tokens still resolve
+    // via ledgerNames — that's why resolveRows still runs).
+    for (const [billName, group] of result.byBillName.entries()) {
+      addBucketedSheets(group.buckets, sanitizeSheetBase(`SALES - ${billName}`));
+    }
+  } else {
+    addBucketedSheets(othersBuckets, "SALES - OTHERS");
+    addBucketedSheets(pharmacyBuckets, "SALES - PHARMACY");
+    addBucketedSheets(dischargeBuckets, "SALES - DISCHARGE");
+  }
 
   const rawCols = BILL_NEEDED_HEADERS.map((h) =>
     h === "PATIENTNAME" ? { wch: 26 } : h === "BILLNAME" ? { wch: 22 } : { wch: 14 }

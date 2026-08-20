@@ -11,7 +11,7 @@ function Field({ label, placeholder, value, onChange }) {
   );
 }
 
-export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames }) {
+export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames, activeHospitalName }) {
   if (!open) return null;
   const update = (key) => (e) => setLedgerNames((v) => ({ ...v, [key]: e.target.value }));
 
@@ -21,7 +21,7 @@ export function WorkingsPanel({ open, onClose, ledgerNames, setLedgerNames }) {
       <div className="drawer" role="dialog" aria-label="Settings">
         <div className="drawer-head">
           <div>
-            <p className="eyebrow">Settings</p>
+            <p className="eyebrow">Settings{activeHospitalName ? ` — ${activeHospitalName}` : ""}</p>
             <h2>Ledger &amp; voucher names</h2>
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="Close">

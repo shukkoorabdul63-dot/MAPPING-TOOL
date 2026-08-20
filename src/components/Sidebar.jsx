@@ -24,7 +24,20 @@ const NAV_SECONDARY = [
   { id: "master", label: "Master", hint: "Patient ledgers", icon: <MasterIcon /> },
 ];
 
-export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {
+const HOSPITAL_COLORS = ["teal", "amber", "red", "navy"];
+
+export function Sidebar({
+  activeView,
+  onNavigate,
+  onOpenWorkings,
+  counts,
+  hospitals,
+  activeHospitalId,
+  onSwitchHospital,
+  onAddHospital,
+}) {
+  const hospitalList = hospitals ? Object.values(hospitals) : [];
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -38,6 +51,27 @@ export function Sidebar({ activeView, onNavigate, onOpenWorkings, counts }) {
           <p className="brand-tag">Mapping tool</p>
         </div>
       </div>
+
+      {hospitalList.length > 0 && (
+        <div className="hospital-switcher">
+          {hospitalList.map((h, i) => (
+            <button
+              key={h.id}
+              type="button"
+              className={`hospital-pill ${HOSPITAL_COLORS[i % HOSPITAL_COLORS.length]}${
+                h.id === activeHospitalId ? " active" : ""
+              }`}
+              onClick={() => onSwitchHospital(h.id)}
+              title={h.name}
+            >
+              {h.name}
+            </button>
+          ))}
+          <button type="button" className="hospital-pill add" onClick={onAddHospital}>
+            + Add
+          </button>
+        </div>
+      )}
 
       <nav className="nav nav-home">
         {NAV_HOME.map((item) => renderNavItem(item, activeView, onNavigate, counts))}

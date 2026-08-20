@@ -9,7 +9,15 @@ import { DialysisView } from "./components/DialysisView.jsx";
 import { ReconcileView } from "./components/ReconcileView.jsx";
 import { MasterView } from "./components/MasterView.jsx";
 import { mapBills } from "./lib/bills.js";
-import { DEFAULT_LEDGER_NAMES } from "./lib/tokens.js";
+import {
+  loadHospitalProfiles,
+  saveHospitalProfiles,
+  getActiveHospital,
+  withUpdatedLedgerNames,
+  withActiveHospital,
+  withNewHospital,
+  BILL_MAPPING_MODES,
+} from "./lib/hospitals.js";
 import "./styles.css";
 
 const EMPTY_VIEW_STATE = {
@@ -34,45 +42,88 @@ const EMPTY_IPCREDIT_STATE = {
   result: null,
 };
 
-// Settings (ledger & voucher names) persist in localStorage so they survive
-// closing the tab — until the user resets them from the Settings panel.
-const LEDGER_NAMES_STORAGE_KEY = "finova-mapping-tool:ledgerNames";
-
-function loadStoredLedgerNames() {
-  try {
-    const raw = localStorage.getItem(LEDGER_NAMES_STORAGE_KEY);
-    if (!raw) return DEFAULT_LEDGER_NAMES;
-    return { ...DEFAULT_LEDGER_NAMES, ...JSON.parse(raw) };
-  } catch {
-    return DEFAULT_LEDGER_NAMES;
-  }
-}
-
 export default function App() {
   const [activeView, setActiveView] = useState("home");
   const [workingsOpen, setWorkingsOpen] = useState(false);
-  const [ledgerNames, setLedgerNames] = useState(loadStoredLedgerNames);
+
+  // Settings (ledger/voucher names) and bill-mapping strategy are scoped per
+  // hospital and persist in localStorage — see src/lib/hospitals.js. This is
+  // a config switcher, not a login: there's no backend, so nothing here
+  // gates access, it just picks which naming/categorization to apply.
+  const [hospitalProfiles, setHospitalProfiles] = useState(loadHospitalProfiles);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(LEDGER_NAMES_STORAGE_KEY, JSON.stringify(ledgerNames));
-    } catch {
-      // localStorage unavailable (private browsing, quota, etc.) — settings
-      // just won't persist across tab closes.
-    }
-  }, [ledgerNames]);
+    saveHospitalProfiles(hospitalProfiles);
+  }, [hospitalProfiles]);
+
+  const activeHospital = getActiveHospital(hospitalProfiles);
+  const ledgerNames = activeHospital?.ledgerNames ?? null;
+  const billMappingMode = activeHospital?.billMappingMode ?? BILL_MAPPING_MODES.FIXED;
+
+  const setLedgerNames = (updater) => {
+    if (!activeHospital) return;
+    setHospitalProfiles((profiles) => {
+      const current = getActiveHospital(profiles);
+      if (!current) return profiles;
+      const next = typeof updater === "function" ? updater(current.ledgerNames) : updater;
+      return withUpdatedLedgerNames(profiles, current.id, next);
+    });
+  };
+
   const [receiptsState, setReceiptsState] = useState(EMPTY_VIEW_STATE);
   const [billsState, setBillsState] = useState(EMPTY_BILLS_STATE);
   const [ipCreditState, setIpCreditState] = useState(EMPTY_IPCREDIT_STATE);
   const [dialysisState, setDialysisState] = useState(EMPTY_VIEW_STATE);
+
+  // Any of these being non-null means processed-but-maybe-undownloaded data
+  // is loaded — switching hospitals would silently re-resolve it under the
+  // new hospital's names/categorization, so that's worth a warning.
+  const hasLoadedData = Boolean(
+    receiptsState.result || billsState.parsed || dialysisState.result || ipCreditState.result
+  );
+
+  const onSwitchHospital = (hospitalId) => {
+    if (hospitalId === hospitalProfiles.activeHospitalId) return;
+    if (
+      hasLoadedData &&
+      !confirm(
+        "You have processed files loaded under the current hospital. Switching will re-resolve previews/downloads for that same data under the new hospital's ledger names and categorization. Re-upload fresh files after switching if this data belongs to the previous hospital."
+      )
+    ) {
+      return;
+    }
+    setHospitalProfiles((profiles) => withActiveHospital(profiles, hospitalId));
+  };
+
+  const onAddHospital = () => {
+    const name = prompt("New hospital name?");
+    if (!name || !name.trim()) return;
+    const shortCode = (prompt("Short code (for reference, e.g. 3-6 letters)?", "") || "").trim().toUpperCase();
+    const usePerBillName = confirm(
+      "Should Voucher Type and discount ledgers be derived per bill name (one sheet per Bill Name, e.g. \"PHARMACY CASH BILL\", \"Discount - X-RAY BILL\")?\n\nOK = yes, per bill name. Cancel = no, use the standard Others/Pharmacy/Discharge categories with configurable names (like Hospital A)."
+    );
+    setHospitalProfiles((profiles) =>
+      withNewHospital(
+        profiles,
+        name.trim(),
+        shortCode,
+        usePerBillName ? BILL_MAPPING_MODES.PER_BILL_NAME : BILL_MAPPING_MODES.FIXED
+      )
+    );
+  };
 
   // Bills result is derived — recomputed whenever parsed bills or IP credit
   // change. That way, uploading IP Credit after Bills doesn't need a
   // re-upload; Discharge income just refreshes.
   const billsResult = useMemo(() => {
     if (!billsState.parsed) return null;
-    return mapBills(billsState.parsed, ipCreditState.result?.creditBySettled || new Map());
-  }, [billsState.parsed, ipCreditState.result]);
+    return mapBills(
+      billsState.parsed,
+      ipCreditState.result?.creditBySettled || new Map(),
+      ipCreditState.result?.flaggedRows || [],
+      billMappingMode
+    );
+  }, [billsState.parsed, ipCreditState.result, billMappingMode]);
 
   const counts = {
     receipts: receiptsState.result?.stats?.candidateBills ?? null,
@@ -90,7 +141,24 @@ export default function App() {
         onNavigate={setActiveView}
         onOpenWorkings={() => setWorkingsOpen(true)}
         counts={counts}
+        hospitals={hospitalProfiles.hospitals}
+        activeHospitalId={hospitalProfiles.activeHospitalId}
+        onSwitchHospital={onSwitchHospital}
+        onAddHospital={onAddHospital}
       />
+      {!activeHospital ? (
+        <main className="workspace">
+          <div className="view">
+            <header className="view-head">
+              <h1>Select a hospital to continue</h1>
+              <p className="lede">
+                Add a hospital from the sidebar to set up its ledger names and
+                bill categorization before processing any files.
+              </p>
+            </header>
+          </div>
+        </main>
+      ) : (
       <main className="workspace">
         {activeView === "home" && (
           <HomeView
@@ -111,6 +179,7 @@ export default function App() {
             setState={setBillsState}
             ledgerNames={ledgerNames}
             ipCreditResult={ipCreditState.result}
+            billMappingMode={billMappingMode}
           />
         )}
         {activeView === "ipcredit" && (
@@ -130,12 +199,16 @@ export default function App() {
           />
         )}
       </main>
-      <WorkingsPanel
-        open={workingsOpen}
-        onClose={() => setWorkingsOpen(false)}
-        ledgerNames={ledgerNames}
-        setLedgerNames={setLedgerNames}
-      />
+      )}
+      {activeHospital && (
+        <WorkingsPanel
+          open={workingsOpen}
+          onClose={() => setWorkingsOpen(false)}
+          ledgerNames={ledgerNames}
+          setLedgerNames={setLedgerNames}
+          activeHospitalName={activeHospital.name}
+        />
+      )}
     </div>
   );
 }
