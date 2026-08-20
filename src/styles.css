@@ -170,35 +170,6 @@ input {
 .hospital-pill.red.active { background: var(--red); border-color: var(--red); color: #fff; }
 .hospital-pill.navy.active { background: #5670a3; border-color: #5670a3; color: #fff; }
 
-.hospital-pill-group {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.hospital-pill-remove {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: #2a3742;
-  color: var(--rail-fg-muted);
-  font-size: 0.75rem;
-  line-height: 1;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0.55;
-  transition: background 0.14s ease, color 0.14s ease, opacity 0.14s ease, border-color 0.14s ease;
-}
-.hospital-pill-group:hover .hospital-pill-remove,
-.hospital-pill-remove:focus { opacity: 1; }
-.hospital-pill-remove:hover { background: var(--red); color: #fff; border-color: var(--red); opacity: 1; }
 
 .nav {
   display: flex;

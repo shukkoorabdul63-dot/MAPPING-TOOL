@@ -15,7 +15,6 @@ import {
   getActiveHospital,
   withUpdatedLedgerNames,
   withActiveHospital,
-  withRemovedHospital,
   BILL_MAPPING_MODES,
 } from "./lib/hospitals.js";
 import "./styles.css";
@@ -95,14 +94,6 @@ export default function App() {
     setHospitalProfiles((profiles) => withActiveHospital(profiles, hospitalId));
   };
 
-  const onRemoveHospital = (hospitalId) => {
-    const target = hospitalProfiles.hospitals[hospitalId];
-    if (!target) return;
-    if (Object.keys(hospitalProfiles.hospitals).length <= 1) return;
-    if (!confirm(`Remove "${target.name}"? Its saved ledger names and settings will be discarded.`)) return;
-    setHospitalProfiles((profiles) => withRemovedHospital(profiles, hospitalId));
-  };
-
   // Bills result is derived — recomputed whenever parsed bills or IP credit
   // change. That way, uploading IP Credit after Bills doesn't need a
   // re-upload; Discharge income just refreshes.
@@ -135,7 +126,6 @@ export default function App() {
         hospitals={hospitalProfiles.hospitals}
         activeHospitalId={hospitalProfiles.activeHospitalId}
         onSwitchHospital={onSwitchHospital}
-        onRemoveHospital={onRemoveHospital}
       />
       {!activeHospital ? (
         <main className="workspace">

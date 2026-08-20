@@ -112,23 +112,3 @@ export function withActiveHospital(profiles, hospitalId) {
   return { ...profiles, activeHospitalId: hospitalId };
 }
 
-export function withNewHospital(profiles, name, shortCode, billMappingMode) {
-  const id = `hosp_${Date.now().toString(36)}`;
-  return {
-    ...profiles,
-    activeHospitalId: id,
-    hospitals: { ...profiles.hospitals, [id]: makeHospital(id, name, shortCode, billMappingMode) },
-  };
-}
-
-export function withRemovedHospital(profiles, hospitalId) {
-  const remainingIds = Object.keys(profiles.hospitals).filter((id) => id !== hospitalId);
-  if (remainingIds.length === 0) return profiles; // never delete the last one
-  const { [hospitalId]: _removed, ...rest } = profiles.hospitals;
-  return {
-    ...profiles,
-    hospitals: rest,
-    activeHospitalId:
-      profiles.activeHospitalId === hospitalId ? remainingIds[0] : profiles.activeHospitalId,
-  };
-}
