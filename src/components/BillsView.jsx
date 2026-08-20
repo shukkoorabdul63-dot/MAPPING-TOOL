@@ -65,9 +65,9 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult, billMa
 
   const stats = result?.stats;
   const isPerBillName = result?.mode === "per-bill-name";
-  const previewOthers = result && !isPerBillName ? resolveRows(result.salesOthersRows.slice(0, 6), ledgerNames) : [];
-  const previewPharmacy = result && !isPerBillName ? resolveRows(result.salesPharmacyRows.slice(0, 6), ledgerNames) : [];
-  const previewDischarge = result && !isPerBillName ? resolveRows(result.salesDischargeRows.slice(0, 6), ledgerNames) : [];
+  const previewOthers = result ? resolveRows(result.salesOthersRows.slice(0, 6), ledgerNames) : [];
+  const previewPharmacy = result ? resolveRows(result.salesPharmacyRows.slice(0, 6), ledgerNames) : [];
+  const previewDischarge = result ? resolveRows(result.salesDischargeRows.slice(0, 6), ledgerNames) : [];
 
   return (
     <div className="view">
@@ -75,10 +75,12 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult, billMa
         <p className="eyebrow">Bills</p>
         <h1>Sales vouchers</h1>
         <p className="lede">
-          Upload the bill analysis export from Teja.{" "}
-          {billMappingMode === "per-bill-name"
-            ? "Each distinct Bill Name gets its own SALES sheet — Voucher Type is the bill name itself, discount lines post to \"Discount - {Bill Name}\", and any row with VAT is split into CGST/SGST automatically."
-            : "The tool splits it into three SALES journals — Others, Pharmacy (with CGST/SGST when taxable), and Discharge."}{" "}
+          Upload the bill analysis export from Teja. The tool splits it into
+          three SALES journals — Others, Pharmacy (with CGST/SGST when
+          taxable), and Discharge.
+          {isPerBillName
+            ? " Voucher Type on each row is the source Bill Name itself, and discount lines post to \"Discount - {Bill Name}\"."
+            : ""}{" "}
           Discharge income is net of IP credit when the IP Credit report is
           loaded on its tab.
         </p>
@@ -107,8 +109,7 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult, billMa
             />
             <StatRow label="Clean bills carried forward" value={stats.cleanRows.toLocaleString()} />
 
-            {!isPerBillName &&
-              (stats.othersSheetCount > 1 || stats.pharmacySheetCount > 1 || stats.dischargeSheetCount > 1) && (
+            {(stats.othersSheetCount > 1 || stats.pharmacySheetCount > 1 || stats.dischargeSheetCount > 1) && (
               <div className="note">
                 <span className="pill teal">Auto-resolved</span>
                 <p>
@@ -121,44 +122,23 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult, billMa
             )}
 
             <div className="divider" />
-            {isPerBillName ? (
-              <>
-                <StatRow
-                  label="Bill-name buckets"
-                  value={`${stats.perBillNameStats.length.toLocaleString()} — one SALES sheet per bill name`}
-                />
-                {stats.perBillNameStats.some((s) => s.sheetCount > 1) && (
-                  <div className="note">
-                    <span className="pill teal">Auto-resolved</span>
-                    <p>
-                      Some bill numbers repeat within a bill-name bucket. Each repeat goes to its
-                      own numbered sheet (e.g. "SALES - PHARMACY CASH B (2)") — upload each as a
-                      separate Tally import so voucher numbers never collide.
-                    </p>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <StatRow
-                  label="Others — SALES journal rows"
-                  value={`${stats.othersOutputRows.toLocaleString()}${stats.othersSheetCount > 1 ? ` — across ${stats.othersSheetCount} sheets` : ""}`}
-                />
-                <StatRow
-                  label="Pharmacy — SALES journal rows"
-                  value={`${stats.pharmacyOutputRows.toLocaleString()}${stats.pharmacySheetCount > 1 ? ` — across ${stats.pharmacySheetCount} sheets` : ""} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt bills)`}
-                />
-                <StatRow
-                  label="Discharge — SALES journal rows"
-                  value={`${stats.dischargeOutputRows.toLocaleString()}${stats.dischargeSheetCount > 1 ? ` — across ${stats.dischargeSheetCount} sheets` : ""}`}
-                />
-              </>
-            )}
-            {stats.pharmacyTaxable > 0 && (
+            <StatRow
+              label="Others — SALES journal rows"
+              value={`${stats.othersOutputRows.toLocaleString()}${stats.othersSheetCount > 1 ? ` — across ${stats.othersSheetCount} sheets` : ""}`}
+            />
+            <StatRow
+              label="Pharmacy — SALES journal rows"
+              value={`${stats.pharmacyOutputRows.toLocaleString()}${stats.pharmacySheetCount > 1 ? ` — across ${stats.pharmacySheetCount} sheets` : ""} (${stats.pharmacyTaxable.toLocaleString()} taxable · ${stats.pharmacyExempt.toLocaleString()} exempt bills)`}
+            />
+            <StatRow
+              label="Discharge — SALES journal rows"
+              value={`${stats.dischargeOutputRows.toLocaleString()}${stats.dischargeSheetCount > 1 ? ` — across ${stats.dischargeSheetCount} sheets` : ""}`}
+            />
+            {(stats.totalCgst > 0 || stats.totalSgst > 0) && (
               <>
                 <div className="divider" />
-                <StatRow label={isPerBillName ? "CGST collected (VAT rows)" : "Pharmacy CGST collected"} value={fmt(stats.totalCgst)} />
-                <StatRow label={isPerBillName ? "SGST collected (VAT rows)" : "Pharmacy SGST collected"} value={fmt(stats.totalSgst)} />
+                <StatRow label="CGST collected" value={fmt(stats.totalCgst)} />
+                <StatRow label="SGST collected" value={fmt(stats.totalSgst)} />
               </>
             )}
             {stats.dischargeCount > 0 && (
@@ -232,41 +212,6 @@ export function BillsView({ state, setState, ledgerNames, ipCreditResult, billMa
           )}
           {previewDischarge.length > 0 && (
             <PreviewCard title="SALES — Discharge (preview)" rows={previewDischarge} />
-          )}
-          {isPerBillName && stats.perBillNameStats.length > 0 && (
-            <section className="card">
-              <h2 className="card-title">By bill name</h2>
-              <div className="table-wrap">
-                <table className="preview">
-                  <thead>
-                    <tr>
-                      <th>Bill Name (= Voucher Type)</th>
-                      <th className="ta-r">Bills</th>
-                      <th className="ta-r">Output rows</th>
-                      <th className="ta-r">Sheets</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stats.perBillNameStats
-                      .slice()
-                      .sort((a, b) => b.bills - a.bills)
-                      .map((s) => (
-                        <tr key={s.billName}>
-                          <td>{s.billName}</td>
-                          <td className="mono ta-r">{s.bills.toLocaleString()}</td>
-                          <td className="mono ta-r">{s.outputRows.toLocaleString()}</td>
-                          <td className="mono ta-r">{s.sheetCount}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="preview-note">
-                Voucher Type on each sheet is the bill name verbatim; discount
-                lines use "Discount - {`{Bill Name}`}"; rows with VAT get a
-                CGST/SGST split automatically.
-              </p>
-            </section>
           )}
         </>
       )}

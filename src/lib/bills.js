@@ -400,14 +400,16 @@ function mapBillsFixed(parsed, ipCreditMap, ipCreditFlaggedRows) {
   };
 }
 
-// Per-bill-name mode: each distinct BILLNAME gets its own bucket/sheet.
-// Voucher Type in the output is the bill name itself (verbatim, no
-// ledgerNames indirection); discount ledger is "Discount - {bill name}"
-// (verbatim). GST split fires whenever VAT Amount > 0 on a row (works
-// regardless of category name — e.g. an Opticals row that carries VAT gets
-// the split too). Discharge IP-credit treatment fires when the bill name
-// contains "discharge" (workflow signal, cross-references the same IP
-// Credit report as fixed mode).
+// Per-bill-name mode: same 3-bucket sheet structure as fixed mode
+// (SALES - OTHERS, SALES - PHARMACY, SALES - DISCHARGE), but the Voucher
+// Type and discount ledger written into each row come from the row's own
+// bill name — Voucher Type = `c.billName` verbatim, discount ledger =
+// `Discount - {c.billName}` verbatim. Bucketing is by substring so every
+// pharmacy variant (PHARMACY CASH BILL, IP PHARMACY BILL, ED PHARMACY BILL,
+// OUTSIDE PHARMACY BILL, ...) lands in the Pharmacy bucket and any bill
+// name containing "discharge" lands in Discharge. GST split fires whenever
+// VAT Amount > 0 on a row (catches taxable non-pharmacy rows like OPTICALS
+// too).
 function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
   const { candidates, scannedDataRows } = parsed;
 
@@ -449,19 +451,18 @@ function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
     clean.push(c);
   }
 
-  // billName → { rows, seen (Map<billNo, count>), buckets }
-  const byBillName = new Map();
-  const ensureGroup = (billName) => {
-    let g = byBillName.get(billName);
-    if (!g) {
-      g = { rows: [], seen: new Map(), buckets: [] };
-      byBillName.set(billName, g);
-    }
-    return g;
-  };
-
+  const salesOthersRows = [];
+  const salesPharmacyRows = [];
+  const salesDischargeRows = [];
+  const othersBuckets = [];
+  const pharmacyBuckets = [];
+  const dischargeBuckets = [];
   const grossByBillName = new Map();
   const dischargeReviewRows = [];
+
+  const othersSeen = new Map();
+  const pharmacySeen = new Map();
+  const dischargeSeen = new Map();
 
   let pharmacyTaxable = 0;
   let pharmacyExempt = 0;
@@ -484,13 +485,12 @@ function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
     const nameLower = c.billName.toLowerCase();
     const party = `${c.opNumber} - ${c.patientName}`;
     const incomeHead = `${c.billName} INCOME-${c.ipop}`;
-    const voucherType = c.billName; // verbatim, per user requirement
-    const discountLedger = `Discount - ${c.billName}`; // verbatim, per user requirement
+    const voucherType = c.billName;
+    const discountLedger = `Discount - ${c.billName}`;
 
     const isDischarge = nameLower.includes("discharge");
-    const isTaxable = !isDischarge && c.vatAmount > 0;
+    const isPharmacy = !isDischarge && nameLower.includes("pharmacy");
 
-    let rows;
     if (isDischarge) {
       const ipCredit = ipCreditMap.get(c.billNo) || 0;
       if (ipCredit > 0) {
@@ -516,21 +516,33 @@ function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
         ]);
       }
 
-      rows = [[voucherType, c.date, c.billNo, party, drParty, "DR", null, null]];
+      const rows = [[voucherType, c.date, c.billNo, party, drParty, "DR", null, null]];
       if (c.billDiscount > 0) {
         rows.push([voucherType, c.date, c.billNo, discountLedger, c.billDiscount, "DR", null, null]);
       }
       rows.push([voucherType, c.date, c.billNo, incomeHead, income, "CR", null, c.doctorCode]);
-    } else if (isTaxable) {
-      pharmacyTaxable++;
+
+      salesDischargeRows.push(...rows);
+      const occIdx = nextOccurrence(dischargeSeen, c.billNo);
+      pushToBucket(dischargeBuckets, occIdx, rows);
+      continue;
+    }
+
+    // GST split is data-driven: any VAT-carrying row gets it, regardless of
+    // whether it landed in Pharmacy or Others (OPTICALS CASH BILL is the
+    // motivating case — carries VAT but not pharmacy-named).
+    const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
+    const rows = [];
+
+    if (c.vatAmount > 0) {
+      if (isPharmacy) pharmacyTaxable++;
       const taxableValue = c.grossAmount - c.vatAmount;
       const cgst = c.vatAmount / 2;
       const sgst = c.vatAmount / 2;
       totalCgst += cgst;
       totalSgst += sgst;
-      const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
 
-      rows = [[voucherType, c.date, c.billNo, party, drAmount, "DR", null, null]];
+      rows.push([voucherType, c.date, c.billNo, party, drAmount, "DR", null, null]);
       if (c.billDiscount > 0) {
         rows.push([voucherType, c.date, c.billNo, discountLedger, c.billDiscount, "DR", null, null]);
       }
@@ -538,54 +550,52 @@ function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
       rows.push([voucherType, c.date, c.billNo, CGST_TOKEN, cgst, "CR", null, null]);
       rows.push([voucherType, c.date, c.billNo, SGST_TOKEN, sgst, "CR", null, null]);
     } else {
-      if (nameLower.includes("pharmacy")) pharmacyExempt++;
-      const drAmount = c.billAmount + c.billAdvance - c.ipCreditReturn;
-      rows = [
-        [voucherType, c.date, c.billNo, party, drAmount, "DR", null, null],
-        [voucherType, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode],
-      ];
+      if (isPharmacy) pharmacyExempt++;
+      rows.push([voucherType, c.date, c.billNo, party, drAmount, "DR", null, null]);
+      rows.push([voucherType, c.date, c.billNo, incomeHead, c.grossAmount, "CR", null, c.doctorCode]);
       if (c.billDiscount > 0) {
         rows.push([voucherType, c.date, c.billNo, discountLedger, c.billDiscount, "DR", null, null]);
       }
     }
 
-    const group = ensureGroup(c.billName);
-    group.rows.push(...rows);
-    const occIdx = nextOccurrence(group.seen, c.billNo);
-    pushToBucket(group.buckets, occIdx, rows);
+    if (isPharmacy) {
+      salesPharmacyRows.push(...rows);
+      const occIdx = nextOccurrence(pharmacySeen, c.billNo);
+      pushToBucket(pharmacyBuckets, occIdx, rows);
+    } else {
+      salesOthersRows.push(...rows);
+      const occIdx = nextOccurrence(othersSeen, c.billNo);
+      pushToBucket(othersBuckets, occIdx, rows);
+    }
   }
 
   const billGrossByName = [...grossByBillName.values()].sort((a, b) => b.grossAmount - a.grossAmount);
-  const perBillNameStats = [...byBillName.entries()].map(([billName, g]) => ({
-    billName,
-    bills: g.seen.size,
-    outputRows: g.rows.length,
-    sheetCount: g.buckets.length,
-  }));
 
   return {
     mode: "per-bill-name",
-    byBillName, // Map<billName, { rows, seen, buckets }>
+    salesOthersRows,
+    salesPharmacyRows,
+    salesDischargeRows,
+    othersBuckets,
+    pharmacyBuckets,
+    dischargeBuckets,
     duplicateLogRows,
     dischargeReviewRows,
     dischargeIpCreditFlaggedRows,
     billGrossByName,
     cleanCandidates: clean,
-    // Empty legacy arrays so downstream views that read them under fixed mode
-    // don't crash if this result ever reaches them; UI checks `mode` to
-    // decide which shape to render.
-    salesOthersRows: [],
-    salesPharmacyRows: [],
-    salesDischargeRows: [],
-    othersBuckets: [],
-    pharmacyBuckets: [],
-    dischargeBuckets: [],
     stats: {
       scannedDataRows,
       cancelledCount,
       duplicateGroupCount,
       duplicateRowCount,
       cleanRows: clean.length,
+      othersCount: othersSeen.size ? [...othersSeen.values()].reduce((a, b) => a + b, 0) : 0,
+      pharmacyCount: pharmacySeen.size ? [...pharmacySeen.values()].reduce((a, b) => a + b, 0) : 0,
+      dischargeCount: dischargeSeen.size ? [...dischargeSeen.values()].reduce((a, b) => a + b, 0) : 0,
+      othersSheetCount: othersBuckets.length,
+      pharmacySheetCount: pharmacyBuckets.length,
+      dischargeSheetCount: dischargeBuckets.length,
       pharmacyTaxable,
       pharmacyExempt,
       totalCgst,
@@ -596,21 +606,11 @@ function mapBillsPerBillName(parsed, ipCreditMap, ipCreditFlaggedRows) {
       dischargeReviewCount: dischargeReviewRows.length,
       dischargeIpCreditFlaggedCount: dischargeIpCreditFlaggedBills.size,
       dischargeIpCreditFlaggedAmount: dischargeIpCreditFlaggedRows.reduce((a, r) => a + r.creditAmount, 0),
-      perBillNameStats,
-      dischargeCount: perBillNameStats
-        .filter((s) => s.billName.toLowerCase().includes("discharge"))
-        .reduce((a, s) => a + s.bills, 0),
+      othersOutputRows: salesOthersRows.length,
+      pharmacyOutputRows: salesPharmacyRows.length,
+      dischargeOutputRows: salesDischargeRows.length,
     },
   };
-}
-
-// Excel sheet names cap at 31 chars and disallow \ / ? * [ ] : — sanitize
-// bill-name-derived sheet base names to that. The bucketSheetName helper
-// then appends " (2)" etc. for repeat occurrences within the same base;
-// leave room for that suffix by capping the base at 26 chars.
-function sanitizeSheetBase(base) {
-  const cleaned = String(base).replace(/[\\/?*\[\]:]+/g, " ").replace(/\s+/g, " ").trim();
-  return cleaned.length > 26 ? cleaned.slice(0, 26).trim() : cleaned;
 }
 
 export function buildBillsOutputWorkbook(result, ledgerNames) {
@@ -645,19 +645,9 @@ export function buildBillsOutputWorkbook(result, ledgerNames) {
     });
   };
 
-  if (result.mode === "per-bill-name") {
-    // One SALES sheet per bill name — voucher type and discount ledger are
-    // already the literal bill-name-derived strings, so no ledgerNames
-    // indirection needed for those cells (CGST/SGST tokens still resolve
-    // via ledgerNames — that's why resolveRows still runs).
-    for (const [billName, group] of result.byBillName.entries()) {
-      addBucketedSheets(group.buckets, sanitizeSheetBase(`SALES - ${billName}`));
-    }
-  } else {
-    addBucketedSheets(othersBuckets, "SALES - OTHERS");
-    addBucketedSheets(pharmacyBuckets, "SALES - PHARMACY");
-    addBucketedSheets(dischargeBuckets, "SALES - DISCHARGE");
-  }
+  addBucketedSheets(othersBuckets, "SALES - OTHERS");
+  addBucketedSheets(pharmacyBuckets, "SALES - PHARMACY");
+  addBucketedSheets(dischargeBuckets, "SALES - DISCHARGE");
 
   const rawCols = BILL_NEEDED_HEADERS.map((h) =>
     h === "PATIENTNAME" ? { wch: 26 } : h === "BILLNAME" ? { wch: 22 } : { wch: 14 }
