@@ -215,7 +215,7 @@ export function parseLedgerExport(workbook) {
 }
 
 // --- Matching ---------------------------------------------------------------
-// Three passes, each only considering rows the previous pass left unmatched:
+// Four passes, each only considering rows the previous pass left unmatched:
 //
 //   1. Exact:   same date, same amount to the paisa.
 //   2. Rounded: same date, amounts equal once both sides are rounded to the
@@ -224,13 +224,19 @@ export function parseLedgerExport(workbook) {
 //      already a rounded whole-rupee figure for the same transaction), so a
 //      paisa-exact comparison alone would falsely report these as
 //      unmatched.
-//   3. Grouped: a customer sometimes pays in two (or more) separate
-//      transactions the same day, but Tally books ONE combined receipt for
-//      the total. Remaining unmatched statement rows are grouped by
-//      (date, customerRef) — Card Number for Card, Customer_VPA for UPI —
-//      summed, and that sum is matched (exact or rounded) against a
-//      remaining unmatched ledger row on the same date. All statement rows
-//      in the group are recorded as matched against that one ledger row.
+//   3. Grouped (statement side): a customer sometimes pays in two (or more)
+//      separate transactions the same day, but Tally books ONE combined
+//      receipt for the total. Remaining unmatched statement rows are
+//      grouped by (date, customerRef) — Card Number for Card, Customer_VPA
+//      for UPI — summed, and that sum is matched (exact or rounded) against
+//      a remaining unmatched ledger row on the same date.
+//   4. Grouped (ledger side): the mirror case — one card swipe/UPI payment
+//      that Tally booked as two (or more) separate receipts for the same
+//      patient, e.g. part-payments entered as distinct vouchers. Remaining
+//      unmatched ledger rows are grouped by (date, particulars) — the
+//      ledger has no card/VPA column, so the patient ID+name in
+//      "Particulars" is the proxy for "same customer" — summed, and matched
+//      against a remaining unmatched statement row on the same date.
 //
 // Within a single pass, a (date, amount) key with more than one row on BOTH
 // sides is a genuine duplicate (e.g. two ₹300 swipes one day) — still
@@ -293,7 +299,10 @@ function passKeyMatch(statementRows, ledgerRows, usedS, usedL, matched, keyOf, m
   return { ambiguousKeyCount, ambiguousMatchCount };
 }
 
-function passGroupedMatch(statementRows, ledgerRows, usedS, usedL, matched) {
+// Multiple statement rows (same day, same customer) sum to ONE ledger
+// receipt — e.g. a customer swiped their card twice and Tally booked one
+// combined receipt for the total.
+function passGroupedMatchStatement(statementRows, ledgerRows, usedS, usedL, matched) {
   const groups = new Map(); // "date||customerRef" -> statement row indices
   statementRows.forEach((r, i) => {
     if (usedS[i]) return;
@@ -341,6 +350,60 @@ function passGroupedMatch(statementRows, ledgerRows, usedS, usedL, matched) {
   return { groupedMatchCount, groupedStatementRowCount };
 }
 
+// The mirror case: ONE statement row (one card swipe / one UPI payment)
+// sums against MULTIPLE ledger rows for the same patient — e.g. Tally
+// booked two part-payments as separate receipts for one combined swipe.
+// Grouped by (date, particulars) since the ledger side has no card/VPA
+// column — "particulars" (the patient ID + name) is the closest proxy for
+// "same customer" on that side.
+function passGroupedMatchLedger(statementRows, ledgerRows, usedS, usedL, matched) {
+  const groups = new Map(); // "date||particulars" -> ledger row indices
+  ledgerRows.forEach((r, i) => {
+    if (usedL[i]) return;
+    const particulars = (r.particulars || "").trim();
+    if (!particulars) return;
+    const key = `${r.date}||${particulars}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+  });
+
+  const statementByDate = new Map();
+  statementRows.forEach((r, i) => {
+    if (usedS[i]) return;
+    if (!statementByDate.has(r.date)) statementByDate.set(r.date, []);
+    statementByDate.get(r.date).push(i);
+  });
+
+  let groupedMatchCount = 0;
+  let groupedLedgerRowCount = 0;
+  for (const idxs of groups.values()) {
+    if (idxs.length < 2) continue; // only genuine multi-receipt groups
+    const date = ledgerRows[idxs[0]].date;
+    const sum = idxs.reduce((a, i) => a + ledgerRows[i].amount, 0);
+    const candidates = statementByDate.get(date) || [];
+    const foundSi = candidates.find(
+      (si) => !usedS[si] && (Math.abs(statementRows[si].amount - sum) < 0.01 || Math.round(statementRows[si].amount) === Math.round(sum))
+    );
+    if (foundSi == null) continue;
+
+    usedS[foundSi] = true;
+    groupedMatchCount++;
+    groupedLedgerRowCount += idxs.length;
+    for (const li of idxs) {
+      usedL[li] = true;
+      matched.push({
+        date,
+        amount: ledgerRows[li].amount,
+        statementRow: statementRows[foundSi],
+        ledgerRow: ledgerRows[li],
+        matchType: "grouped",
+        groupSize: idxs.length,
+      });
+    }
+  }
+  return { groupedMatchCount, groupedLedgerRowCount };
+}
+
 export function matchBankReconcile(statementRows, ledgerRows) {
   const usedS = new Array(statementRows.length).fill(false);
   const usedL = new Array(ledgerRows.length).fill(false);
@@ -348,7 +411,8 @@ export function matchBankReconcile(statementRows, ledgerRows) {
 
   const exact = passKeyMatch(statementRows, ledgerRows, usedS, usedL, matched, exactKey, "exact");
   const rounded = passKeyMatch(statementRows, ledgerRows, usedS, usedL, matched, roundedKey, "rounded");
-  const grouped = passGroupedMatch(statementRows, ledgerRows, usedS, usedL, matched);
+  const groupedStatement = passGroupedMatchStatement(statementRows, ledgerRows, usedS, usedL, matched);
+  const groupedLedger = passGroupedMatchLedger(statementRows, ledgerRows, usedS, usedL, matched);
 
   const unmatchedStatement = statementRows.filter((_, i) => !usedS[i]);
   const unmatchedLedger = ledgerRows.filter((_, i) => !usedL[i]);
@@ -367,8 +431,9 @@ export function matchBankReconcile(statementRows, ledgerRows) {
       matchedSum: sum(matched, (r) => r.amount),
       exactMatchCount: matched.filter((m) => m.matchType === "exact").length,
       roundedMatchCount: matched.filter((m) => m.matchType === "rounded").length,
-      groupedMatchCount: grouped.groupedMatchCount,
-      groupedStatementRowCount: grouped.groupedStatementRowCount,
+      groupedMatchCount: groupedStatement.groupedMatchCount + groupedLedger.groupedMatchCount,
+      groupedStatementRowCount: groupedStatement.groupedStatementRowCount,
+      groupedLedgerRowCount: groupedLedger.groupedLedgerRowCount,
       unmatchedStatementCount: unmatchedStatement.length,
       unmatchedStatementSum: sum(unmatchedStatement, (r) => r.amount),
       unmatchedLedgerCount: unmatchedLedger.length,
