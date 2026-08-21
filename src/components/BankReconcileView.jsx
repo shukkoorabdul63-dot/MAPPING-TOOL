@@ -21,6 +21,7 @@ function fmt(n) {
 }
 
 const MATCH_TYPE_LABEL = { exact: "Exact", rounded: "Rounded", grouped: "Grouped" };
+const PREVIEW_LIMIT = 10;
 
 function SideDropzone({ label, hint, accept, side, onFile }) {
   const { fileName, status, error } = side;
@@ -40,45 +41,64 @@ function SideDropzone({ label, hint, accept, side, onFile }) {
   );
 }
 
+function PreviewCaption({ label, total }) {
+  if (total <= PREVIEW_LIMIT) return <p className="preview-note">{label}</p>;
+  return (
+    <p className="preview-note">
+      {label} — showing first {PREVIEW_LIMIT} of {total.toLocaleString()}; full list is in the downloaded report.
+    </p>
+  );
+}
+
 function ResultTables({ result }) {
+  const matchedPreview = result.matched.slice(0, PREVIEW_LIMIT);
+  const unmatchedStatementPreview = result.unmatchedStatement.slice(0, PREVIEW_LIMIT);
+  const unmatchedLedgerPreview = result.unmatchedLedger.slice(0, PREVIEW_LIMIT);
+
   return (
     <>
-      {result.matched.length > 0 && (
-        <div className="table-wrap">
-          <table className="preview">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th className="ta-r">Statement Amt</th>
-                <th className="ta-r">Ledger Amt</th>
-                <th>Type</th>
-                <th>Ledger Vch No.</th>
-                <th>Particulars</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.matched.map((m, i) => (
-                <tr key={i}>
-                  <td className="mono">{m.date}</td>
-                  <td className="mono ta-r">{fmt(m.statementRow.amount)}</td>
-                  <td className="mono ta-r">{fmt(m.ledgerRow.amount)}</td>
-                  <td>
-                    <span className="pill navy">
-                      {MATCH_TYPE_LABEL[m.matchType]}
-                      {m.groupSize ? ` ×${m.groupSize}` : ""}
-                    </span>
-                  </td>
-                  <td className="mono">{m.ledgerRow.vchNo}</td>
-                  <td>{m.ledgerRow.particulars}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {result.unmatchedStatement.length > 0 && (
+      {matchedPreview.length > 0 && (
         <>
-          <p className="preview-note">Unmatched — Statement (bank shows this, no ledger entry found)</p>
+          <PreviewCaption label="Matched (preview)" total={result.matched.length} />
+          <div className="table-wrap">
+            <table className="preview">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th className="ta-r">Statement Amt</th>
+                  <th className="ta-r">Ledger Amt</th>
+                  <th>Type</th>
+                  <th>Ledger Vch No.</th>
+                  <th>Particulars</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matchedPreview.map((m, i) => (
+                  <tr key={i}>
+                    <td className="mono">{m.date}</td>
+                    <td className="mono ta-r">{fmt(m.statementRow.amount)}</td>
+                    <td className="mono ta-r">{fmt(m.ledgerRow.amount)}</td>
+                    <td>
+                      <span className="pill navy">
+                        {MATCH_TYPE_LABEL[m.matchType]}
+                        {m.groupSize ? ` ×${m.groupSize}` : ""}
+                      </span>
+                    </td>
+                    <td className="mono">{m.ledgerRow.vchNo}</td>
+                    <td>{m.ledgerRow.particulars}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {unmatchedStatementPreview.length > 0 && (
+        <>
+          <PreviewCaption
+            label="Unmatched — Statement (preview; bank shows this, no ledger entry found)"
+            total={result.unmatchedStatement.length}
+          />
           <div className="table-wrap">
             <table className="preview">
               <thead>
@@ -89,7 +109,7 @@ function ResultTables({ result }) {
                 </tr>
               </thead>
               <tbody>
-                {result.unmatchedStatement.map((r, i) => (
+                {unmatchedStatementPreview.map((r, i) => (
                   <tr key={i}>
                     <td className="mono">{r.date}</td>
                     <td className="mono ta-r">{fmt(r.amount)}</td>
@@ -101,9 +121,12 @@ function ResultTables({ result }) {
           </div>
         </>
       )}
-      {result.unmatchedLedger.length > 0 && (
+      {unmatchedLedgerPreview.length > 0 && (
         <>
-          <p className="preview-note">Unmatched — Ledger (booked in Tally, no statement entry found)</p>
+          <PreviewCaption
+            label="Unmatched — Ledger (preview; booked in Tally, no statement entry found)"
+            total={result.unmatchedLedger.length}
+          />
           <div className="table-wrap">
             <table className="preview">
               <thead>
@@ -115,7 +138,7 @@ function ResultTables({ result }) {
                 </tr>
               </thead>
               <tbody>
-                {result.unmatchedLedger.map((r, i) => (
+                {unmatchedLedgerPreview.map((r, i) => (
                   <tr key={i}>
                     <td className="mono">{r.date}</td>
                     <td className="mono ta-r">{fmt(r.amount)}</td>
@@ -141,7 +164,16 @@ function ReconcileSection({ title, hint, accept, section, sectionKey, result, pa
         setTimeout(() => {
           try {
             const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, { type: "array", cellDates: true });
+            // No `cellDates: true` here (unlike the other views): SheetJS's
+            // Date-object conversion for the ledger export's numeric date
+            // cells is timezone-dependent and comes out a day early for
+            // browsers running in Asia/Kolkata (confirmed against the real
+            // ledger file — every row shifted from 2-Aug to 1-Aug). Keeping
+            // dates as raw Excel serials and decoding them via
+            // XLSX.SSF.parse_date_code (excelSerialToDDMMYYYY's number
+            // branch) is pure day-count arithmetic with no timezone
+            // involved, so it's correct in every browser.
+            const workbook = XLSX.read(data, { type: "array" });
             const parsed = parser(workbook);
             patchSide(sectionKey, side, { parsed, status: "done" });
           } catch (err) {
