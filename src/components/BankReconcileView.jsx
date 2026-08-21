@@ -155,7 +155,7 @@ function ResultTables({ result }) {
   );
 }
 
-function ReconcileSection({ title, hint, accept, section, sectionKey, result, patchSide }) {
+function ReconcileSection({ title, hint, accept, section, sectionKey, result, patchSide, onDownload }) {
   const handleFile = useCallback(
     (side, parser) => (file) => {
       patchSide(sectionKey, side, { fileName: file.name, status: "processing", error: null, parsed: null });
@@ -238,6 +238,12 @@ function ReconcileSection({ title, hint, accept, section, sectionKey, result, pa
           )}
 
           <ResultTables result={result} />
+
+          <div className="btn-row">
+            <Button variant="primary" onClick={onDownload}>
+              Download reconciliation report
+            </Button>
+          </div>
         </>
       )}
     </section>
@@ -273,10 +279,16 @@ export function BankReconcileView({ state, setState }) {
     return matchBankReconcile(statement.parsed.rows, ledger.parsed.rows);
   }, [state.upi.statement.parsed, state.upi.ledger.parsed]);
 
-  const download = () => {
-    if (!cardResult && !upiResult) return;
-    const wb = buildBankReconcileWorkbook({ card: cardResult, upi: upiResult });
-    downloadWorkbook(wb, "bank_reconcile.xlsx");
+  const downloadCard = () => {
+    if (!cardResult) return;
+    const wb = buildBankReconcileWorkbook({ card: cardResult, upi: null });
+    downloadWorkbook(wb, "bank_reconcile_card.xlsx");
+  };
+
+  const downloadUpi = () => {
+    if (!upiResult) return;
+    const wb = buildBankReconcileWorkbook({ card: null, upi: upiResult });
+    downloadWorkbook(wb, "bank_reconcile_upi.xlsx");
   };
 
   return (
@@ -300,6 +312,7 @@ export function BankReconcileView({ state, setState }) {
         sectionKey="card"
         result={cardResult}
         patchSide={patchSide}
+        onDownload={downloadCard}
       />
 
       <ReconcileSection
@@ -310,17 +323,8 @@ export function BankReconcileView({ state, setState }) {
         sectionKey="upi"
         result={upiResult}
         patchSide={patchSide}
+        onDownload={downloadUpi}
       />
-
-      {(cardResult || upiResult) && (
-        <section className="card">
-          <div className="btn-row">
-            <Button variant="primary" onClick={download}>
-              Download reconciliation report
-            </Button>
-          </div>
-        </section>
-      )}
     </div>
   );
 }
