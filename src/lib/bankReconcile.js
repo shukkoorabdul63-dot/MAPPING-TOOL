@@ -404,6 +404,71 @@ function passGroupedMatchLedger(statementRows, ledgerRows, usedS, usedL, matched
   return { groupedMatchCount, groupedLedgerRowCount };
 }
 
+// --- Possible matches (no shared identity, needs manual review) -----------
+// After all four passes above, some same-day amounts can still coincide
+// purely by chance — e.g. two unrelated patients' receipts summing to a
+// third, unrelated card swipe, with no shared card/VPA or patient name to
+// justify it. These are surfaced as *suggestions* only, never folded into
+// the reconciled Matched total or subtracted from Unmatched: with repeated
+// round amounts (100/200/300…) common in hospital billing, a blind "any two
+// rows that sum to X" search often finds more than one plausible-looking
+// pairing for the same target (confirmed against real data — two separate
+// unmatched ₹600 statement rows, two separate ledger pairs that both also
+// sum to ₹600), and silently guessing which pairing is real risks
+// misattributing a payment. So every candidate pairing is listed — capped
+// at 2-row combinations, not full subset-sum, to keep the search sane — and
+// a tied target (more than one candidate pairing) is left for a human to
+// resolve with the Particulars/Card Ref columns, not decided here.
+//
+// `pairRows`/`pairUsed` is the side searched in 2-row combinations;
+// `singleRows`/`singleUsed` is the side each pair's sum is checked against.
+// `pairSide` labels which side that is, for the caller to render/export
+// both directions (ledger pairs -> one statement row, and the mirror)
+// through the same shape.
+function findGroupSuggestions(pairRows, pairUsed, singleRows, singleUsed, pairSide) {
+  const byDate = new Map();
+  pairRows.forEach((r, i) => {
+    if (pairUsed[i]) return;
+    if (!byDate.has(r.date)) byDate.set(r.date, []);
+    byDate.get(r.date).push(i);
+  });
+
+  const singleByDate = new Map();
+  singleRows.forEach((r, i) => {
+    if (singleUsed[i]) return;
+    if (!singleByDate.has(r.date)) singleByDate.set(r.date, []);
+    singleByDate.get(r.date).push(i);
+  });
+
+  const suggestions = [];
+  for (const [date, idxs] of byDate) {
+    const singleIdxs = singleByDate.get(date);
+    if (!singleIdxs || singleIdxs.length === 0) continue;
+    for (let a = 0; a < idxs.length; a++) {
+      for (let b = a + 1; b < idxs.length; b++) {
+        const i = idxs[a];
+        const j = idxs[b];
+        const sum = pairRows[i].amount + pairRows[j].amount;
+        for (const si of singleIdxs) {
+          const target = singleRows[si].amount;
+          const isExact = Math.abs(target - sum) < 0.01;
+          const isRounded = !isExact && Math.round(target) === Math.round(sum);
+          if (!isExact && !isRounded) continue;
+          suggestions.push({
+            pairSide,
+            date,
+            pairRows: [pairRows[i], pairRows[j]],
+            singleRow: singleRows[si],
+            sum,
+            matchBasis: isExact ? "exact" : "rounded",
+          });
+        }
+      }
+    }
+  }
+  return suggestions;
+}
+
 export function matchBankReconcile(statementRows, ledgerRows) {
   const usedS = new Array(statementRows.length).fill(false);
   const usedL = new Array(ledgerRows.length).fill(false);
@@ -417,11 +482,25 @@ export function matchBankReconcile(statementRows, ledgerRows) {
   const unmatchedStatement = statementRows.filter((_, i) => !usedS[i]);
   const unmatchedLedger = ledgerRows.filter((_, i) => !usedL[i]);
 
+  // Suggestions only — deliberately does not touch usedS/usedL, so
+  // unmatchedStatement/unmatchedLedger above (and the reconciled Matched
+  // total) are unaffected either way.
+  const possibleMatches = [
+    ...findGroupSuggestions(ledgerRows, usedL, statementRows, usedS, "ledger"),
+    ...findGroupSuggestions(statementRows, usedS, ledgerRows, usedL, "statement"),
+  ];
+  const possibleMatchTargetCounts = new Map();
+  for (const s of possibleMatches) {
+    possibleMatchTargetCounts.set(s.singleRow, (possibleMatchTargetCounts.get(s.singleRow) || 0) + 1);
+  }
+  const possibleMatchTiedTargetCount = [...possibleMatchTargetCounts.values()].filter((c) => c > 1).length;
+
   const sum = (rows, pick) => rows.reduce((a, r) => a + pick(r), 0);
   return {
     matched,
     unmatchedStatement,
     unmatchedLedger,
+    possibleMatches,
     stats: {
       statementCount: statementRows.length,
       statementSum: sum(statementRows, (r) => r.amount),
@@ -440,6 +519,8 @@ export function matchBankReconcile(statementRows, ledgerRows) {
       unmatchedLedgerSum: sum(unmatchedLedger, (r) => r.amount),
       ambiguousKeyCount: exact.ambiguousKeyCount + rounded.ambiguousKeyCount,
       ambiguousMatchCount: exact.ambiguousMatchCount + rounded.ambiguousMatchCount,
+      possibleMatchCount: possibleMatches.length,
+      possibleMatchTiedTargetCount,
     },
   };
 }
@@ -457,6 +538,15 @@ const MATCHED_HEADERS = [
 ];
 const UNMATCHED_STATEMENT_HEADERS = ["Date", "Amount", "Customer Ref"];
 const UNMATCHED_LEDGER_HEADERS = ["Date", "Amount", "Vch No.", "Vch Type", "Particulars"];
+const POSSIBLE_HEADERS = [
+  "Date",
+  "Statement Amount(s)",
+  "Statement Ref(s)",
+  "Ledger Amount(s)",
+  "Ledger Vch/Particulars",
+  "Sum",
+  "Basis",
+];
 
 function matchedToAOA(matched) {
   return matched.map((m) => [
@@ -479,6 +569,22 @@ function unmatchedLedgerToAOA(rows) {
   return rows.map((r) => [r.date, r.amount, r.vchNo, r.vchType, r.particulars]);
 }
 
+function possibleMatchesToAOA(rows) {
+  return rows.map((s) => {
+    const stmtRows = s.pairSide === "statement" ? s.pairRows : [s.singleRow];
+    const ledgerRowsArr = s.pairSide === "ledger" ? s.pairRows : [s.singleRow];
+    return [
+      s.date,
+      stmtRows.map((r) => r.amount).join(" + "),
+      stmtRows.map((r) => r.customerRef || "").join(" / "),
+      ledgerRowsArr.map((r) => r.amount).join(" + "),
+      ledgerRowsArr.map((r) => `${r.vchNo}: ${r.particulars}`).join(" / "),
+      s.sum,
+      s.matchBasis,
+    ];
+  });
+}
+
 const MATCHED_COLS = [
   { wch: 11 },
   { wch: 14 },
@@ -491,6 +597,7 @@ const MATCHED_COLS = [
 ];
 const UNMATCHED_STATEMENT_COLS = [{ wch: 11 }, { wch: 14 }, { wch: 22 }];
 const UNMATCHED_LEDGER_COLS = [{ wch: 11 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 28 }];
+const POSSIBLE_COLS = [{ wch: 11 }, { wch: 16 }, { wch: 24 }, { wch: 16 }, { wch: 36 }, { wch: 12 }, { wch: 10 }];
 
 function appendSection(wb, label, result) {
   if (!result) return;
@@ -511,6 +618,11 @@ function appendSection(wb, label, result) {
     const ws = XLSX.utils.aoa_to_sheet([UNMATCHED_LEDGER_HEADERS, ...unmatchedLedgerToAOA(result.unmatchedLedger)]);
     ws["!cols"] = UNMATCHED_LEDGER_COLS;
     XLSX.utils.book_append_sheet(wb, ws, `${label} UNMATCHED - LEDGER`);
+  }
+  if (result.possibleMatches && result.possibleMatches.length > 0) {
+    const ws = XLSX.utils.aoa_to_sheet([POSSIBLE_HEADERS, ...possibleMatchesToAOA(result.possibleMatches)]);
+    ws["!cols"] = POSSIBLE_COLS;
+    XLSX.utils.book_append_sheet(wb, ws, `${label} POSSIBLE MATCHES`);
   }
 }
 

@@ -52,6 +52,7 @@ function PreviewCaption({ label, total }) {
 
 function ResultTables({ result }) {
   const matchedPreview = result.matched.slice(0, PREVIEW_LIMIT);
+  const possibleMatchesPreview = result.possibleMatches.slice(0, PREVIEW_LIMIT);
   const unmatchedStatementPreview = result.unmatchedStatement.slice(0, PREVIEW_LIMIT);
   const unmatchedLedgerPreview = result.unmatchedLedger.slice(0, PREVIEW_LIMIT);
 
@@ -88,6 +89,54 @@ function ResultTables({ result }) {
                     <td>{m.ledgerRow.particulars}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {possibleMatchesPreview.length > 0 && (
+        <>
+          <div className="note">
+            <span className="pill amber">Review</span>
+            <p>
+              {result.stats.possibleMatchCount} possible match{result.stats.possibleMatchCount === 1 ? "" : "es"}{" "}
+              found by amount only — same day, no shared card/VPA or patient name to justify it. Not counted as
+              matched and not removed from Unmatched below; confirm manually using the ref/particulars columns
+              before treating either side as reconciled.
+              {result.stats.possibleMatchTiedTargetCount > 0 &&
+                ` ${result.stats.possibleMatchTiedTargetCount} of these have more than one candidate pairing for the same target — don't assume the first one shown is the right one.`}
+            </p>
+          </div>
+          <PreviewCaption label="Possible matches (preview) — needs manual review" total={result.possibleMatches.length} />
+          <div className="table-wrap">
+            <table className="preview">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th className="ta-r">Statement Amt(s)</th>
+                  <th>Statement Ref(s)</th>
+                  <th className="ta-r">Ledger Amt(s)</th>
+                  <th>Ledger Vch / Particulars</th>
+                  <th>Basis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {possibleMatchesPreview.map((s, i) => {
+                  const stmtRows = s.pairSide === "statement" ? s.pairRows : [s.singleRow];
+                  const ledgerRowsArr = s.pairSide === "ledger" ? s.pairRows : [s.singleRow];
+                  return (
+                    <tr key={i}>
+                      <td className="mono">{s.date}</td>
+                      <td className="mono ta-r">{stmtRows.map((r) => fmt(r.amount)).join(" + ")}</td>
+                      <td className="mono">{stmtRows.map((r) => r.customerRef || "").join(" / ")}</td>
+                      <td className="mono ta-r">{ledgerRowsArr.map((r) => fmt(r.amount)).join(" + ")}</td>
+                      <td>{ledgerRowsArr.map((r) => `${r.vchNo}: ${r.particulars}`).join(" / ")}</td>
+                      <td>
+                        <span className="pill amber">{s.matchBasis === "exact" ? "Exact" : "Rounded"}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -225,6 +274,12 @@ function ReconcileSection({ title, hint, accept, section, sectionKey, result, pa
             label="Unmatched — Ledger"
             value={`${result.stats.unmatchedLedgerCount.toLocaleString()} (₹${fmt(result.stats.unmatchedLedgerSum)})`}
           />
+          {result.stats.possibleMatchCount > 0 && (
+            <StatRow
+              label="Possible matches (unconfirmed)"
+              value={`${result.stats.possibleMatchCount.toLocaleString()} — not counted above, see below`}
+            />
+          )}
 
           {result.stats.ambiguousMatchCount > 0 && (
             <div className="note">
