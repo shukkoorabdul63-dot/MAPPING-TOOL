@@ -70,6 +70,7 @@ export function Dropzone({
   emptyTitle,
   emptyHint,
   filledHint = "Click to choose a different file",
+  accept = ".xlsx,.xls",
 }) {
   const [dragOver, setDragOver] = React.useState(false);
   const inputRef = React.useRef(null);
@@ -94,7 +95,7 @@ export function Dropzone({
       <input
         ref={inputRef}
         type="file"
-        accept=".xlsx,.xls"
+        accept={accept}
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) onFile(file);

@@ -1,10 +1,21 @@
 import * as XLSX from "xlsx";
 
+const MONTH_ABBR = {
+  JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
+  JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+};
+
 export function excelSerialToDDMMYYYY(v) {
   if (v == null || v === "") return "";
   if (typeof v === "string") {
     const trimmed = v.trim();
     if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) return trimmed;
+    // "08-AUG-2026" style (bank/card statement dates) -> "08/08/2026"
+    const m = trimmed.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+    if (m) {
+      const mon = MONTH_ABBR[m[2].toUpperCase()];
+      if (mon) return `${m[1].padStart(2, "0")}/${String(mon).padStart(2, "0")}/${m[3]}`;
+    }
     return trimmed;
   }
   if (v instanceof Date) {

@@ -6,6 +6,7 @@ import {
   IpCreditIcon,
   DialysisIcon,
   ReconcileIcon,
+  BankReconcileIcon,
   MasterIcon,
   WorkingsIcon,
 } from "./icons.jsx";
@@ -18,6 +19,7 @@ const NAV_PRIMARY = [
   { id: "ipcredit", label: "IP Credit", hint: "Feeds Discharge", icon: <IpCreditIcon /> },
   { id: "dialysis", label: "Dialysis", hint: "Scheme receivables", icon: <DialysisIcon /> },
   { id: "reconcile", label: "Reconcile", hint: "Cross-check totals", icon: <ReconcileIcon /> },
+  { id: "bankreconcile", label: "Bank Reconcile", hint: "Card & UPI vs Ledger", icon: <BankReconcileIcon /> },
 ];
 
 const NAV_SECONDARY = [

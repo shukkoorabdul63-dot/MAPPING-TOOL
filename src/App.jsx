@@ -7,6 +7,7 @@ import { BillsView } from "./components/BillsView.jsx";
 import { IpCreditView } from "./components/IpCreditView.jsx";
 import { DialysisView } from "./components/DialysisView.jsx";
 import { ReconcileView } from "./components/ReconcileView.jsx";
+import { BankReconcileView, EMPTY_BANK_RECONCILE_STATE } from "./components/BankReconcileView.jsx";
 import { MasterView } from "./components/MasterView.jsx";
 import { mapBills } from "./lib/bills.js";
 import {
@@ -73,6 +74,7 @@ export default function App() {
   const [billsState, setBillsState] = useState(EMPTY_BILLS_STATE);
   const [ipCreditState, setIpCreditState] = useState(EMPTY_IPCREDIT_STATE);
   const [dialysisState, setDialysisState] = useState(EMPTY_VIEW_STATE);
+  const [bankReconcileState, setBankReconcileState] = useState(EMPTY_BANK_RECONCILE_STATE);
 
   // Any of these being non-null means processed-but-maybe-undownloaded data
   // is loaded — switching hospitals would silently re-resolve it under the
@@ -113,6 +115,7 @@ export default function App() {
     ipcredit: ipCreditState.result?.stats?.dataRows ?? null,
     dialysis: dialysisState.result?.stats?.bookedRows ?? null,
     reconcile: null,
+    bankreconcile: null,
     master: null,
   };
 
@@ -171,6 +174,9 @@ export default function App() {
         )}
         {activeView === "reconcile" && (
           <ReconcileView receiptResult={receiptsState.result} billsResult={billsResult} />
+        )}
+        {activeView === "bankreconcile" && (
+          <BankReconcileView state={bankReconcileState} setState={setBankReconcileState} />
         )}
         {activeView === "master" && (
           <MasterView

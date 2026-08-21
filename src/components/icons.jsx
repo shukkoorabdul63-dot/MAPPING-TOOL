@@ -67,6 +67,17 @@ export function ReconcileIcon() {
   );
 }
 
+export function BankReconcileIcon() {
+  return (
+    <svg {...base}>
+      <path d="M4 9 12 4l8 5" />
+      <path d="M5 9v9M9 9v9M15 9v9M19 9v9" />
+      <path d="M3.5 20.5h17" />
+      <path d="M9.5 13.5 11 15l3.5-3.5" />
+    </svg>
+  );
+}
+
 export function MasterIcon() {
   return (
     <svg {...base}>
