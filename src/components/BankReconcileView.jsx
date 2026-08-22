@@ -20,7 +20,7 @@ function fmt(n) {
   return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-const MATCH_TYPE_LABEL = { exact: "Exact", rounded: "Rounded", grouped: "Grouped" };
+const MATCH_TYPE_LABEL = { exact: "Exact", rounded: "Rounded", grouped: "Grouped", paired: "Paired" };
 const PREVIEW_LIMIT = 10;
 
 function SideDropzone({ label, hint, accept, side, onFile }) {
@@ -55,6 +55,7 @@ function ResultTables({ result }) {
   const possibleMatchesPreview = result.possibleMatches.slice(0, PREVIEW_LIMIT);
   const unmatchedStatementPreview = result.unmatchedStatement.slice(0, PREVIEW_LIMIT);
   const unmatchedLedgerPreview = result.unmatchedLedger.slice(0, PREVIEW_LIMIT);
+  const unmatchedByAmountPreview = result.unmatchedByAmount.slice(0, PREVIEW_LIMIT);
 
   return (
     <>
@@ -82,7 +83,7 @@ function ResultTables({ result }) {
                     <td>
                       <span className="pill navy">
                         {MATCH_TYPE_LABEL[m.matchType]}
-                        {m.groupSize ? ` ×${m.groupSize}` : ""}
+                        {m.matchType === "grouped" && m.groupSize ? ` ×${m.groupSize}` : ""}
                       </span>
                     </td>
                     <td className="mono">{m.ledgerRow.vchNo}</td>
@@ -200,6 +201,40 @@ function ResultTables({ result }) {
           </div>
         </>
       )}
+      {unmatchedByAmountPreview.length > 0 && (
+        <>
+          <PreviewCaption
+            label="Unmatched by amount (preview) — biggest gap-causing amounts first"
+            total={result.unmatchedByAmount.length}
+          />
+          <div className="table-wrap">
+            <table className="preview">
+              <thead>
+                <tr>
+                  <th className="ta-r">Amount</th>
+                  <th className="ta-r">Stmt Count</th>
+                  <th className="ta-r">Ledger Count</th>
+                  <th className="ta-r">Net (₹)</th>
+                  <th>Statement Refs</th>
+                  <th>Ledger Particulars</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unmatchedByAmountPreview.map((e, i) => (
+                  <tr key={i}>
+                    <td className="mono ta-r">{fmt(e.amount)}</td>
+                    <td className="mono ta-r">{e.statementRows.length}</td>
+                    <td className="mono ta-r">{e.ledgerRows.length}</td>
+                    <td className="mono ta-r">{fmt(e.netAmount)}</td>
+                    <td className="mono">{e.statementRows.map((r) => r.customerRef || "").join(", ")}</td>
+                    <td>{e.ledgerRows.map((r) => `${r.vchNo}: ${r.particulars}`).join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -264,7 +299,7 @@ function ReconcileSection({ title, hint, accept, section, sectionKey, result, pa
           <div className="divider" />
           <StatRow
             label="Matched"
-            value={`${result.stats.matchedCount.toLocaleString()} (₹${fmt(result.stats.matchedSum)}) — ${result.stats.exactMatchCount} exact, ${result.stats.roundedMatchCount} rounded, ${result.stats.groupedMatchCount} grouped`}
+            value={`${result.stats.matchedCount.toLocaleString()} (₹${fmt(result.stats.matchedSum)}) — ${result.stats.exactMatchCount} exact, ${result.stats.roundedMatchCount} rounded, ${result.stats.groupedMatchCount} grouped, ${result.stats.pairedMatchCount} paired`}
           />
           <StatRow
             label="Unmatched — Statement"
