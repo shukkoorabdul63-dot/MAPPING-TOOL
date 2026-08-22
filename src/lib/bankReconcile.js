@@ -568,24 +568,27 @@ export function matchBankReconcile(statementRows, ledgerRows) {
   }
   const possibleMatchTiedTargetCount = [...possibleMatchTargetCounts.values()].filter((c) => c > 1).length;
 
-  // Group remaining unmatched rows by amount. The point of the whole
-  // reconciliation is to explain the statement-vs-ledger total gap;
-  // per-row unmatched lists are useful for spot-checking, but the
-  // gap-explaining view is "which amounts are causing the diff, and
-  // which customers had those amounts on each side."
-  const byAmountKey = (a) => Math.round(a * 100);
+  // Group remaining unmatched rows by (date, amount). The point of the
+  // whole reconciliation is to explain the statement-vs-ledger total
+  // gap; per-row unmatched lists are useful for spot-checking, but the
+  // gap-explaining view is "on this date, this amount had X statement
+  // rows and Y ledger rows, and here are the customers on each side."
+  // Date is part of the key so a run covering multiple dates doesn't
+  // silently collapse rows from different dates under one amount — each
+  // day's imbalance stays visible on its own row.
+  const groupKey = (date, amount) => `${date}|${Math.round(amount * 100)}`;
   const unmatchedByAmountMap = new Map();
-  const getEntry = (amount) => {
-    const key = byAmountKey(amount);
+  const getEntry = (date, amount) => {
+    const key = groupKey(date, amount);
     let e = unmatchedByAmountMap.get(key);
     if (!e) {
-      e = { amount, statementRows: [], ledgerRows: [], netCount: 0, netAmount: 0 };
+      e = { date, amount, statementRows: [], ledgerRows: [], netCount: 0, netAmount: 0 };
       unmatchedByAmountMap.set(key, e);
     }
     return e;
   };
-  for (const r of unmatchedStatement) getEntry(r.amount).statementRows.push(r);
-  for (const r of unmatchedLedger) getEntry(r.amount).ledgerRows.push(r);
+  for (const r of unmatchedStatement) getEntry(r.date, r.amount).statementRows.push(r);
+  for (const r of unmatchedLedger) getEntry(r.date, r.amount).ledgerRows.push(r);
   for (const e of unmatchedByAmountMap.values()) {
     e.netCount = e.statementRows.length - e.ledgerRows.length;
     e.netAmount = e.netCount * e.amount;
@@ -650,6 +653,7 @@ const POSSIBLE_HEADERS = [
   "Basis",
 ];
 const UNMATCHED_BY_AMOUNT_HEADERS = [
+  "Date",
   "Amount",
   "Statement Count",
   "Ledger Count",
@@ -682,6 +686,7 @@ function unmatchedLedgerToAOA(rows) {
 
 function unmatchedByAmountToAOA(rows) {
   return rows.map((e) => [
+    e.date,
     e.amount,
     e.statementRows.length,
     e.ledgerRows.length,
@@ -721,7 +726,7 @@ const MATCHED_COLS = [
 const UNMATCHED_STATEMENT_COLS = [{ wch: 11 }, { wch: 14 }, { wch: 22 }];
 const UNMATCHED_LEDGER_COLS = [{ wch: 11 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 28 }];
 const POSSIBLE_COLS = [{ wch: 11 }, { wch: 16 }, { wch: 24 }, { wch: 16 }, { wch: 36 }, { wch: 12 }, { wch: 10 }];
-const UNMATCHED_BY_AMOUNT_COLS = [{ wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 48 }, { wch: 60 }];
+const UNMATCHED_BY_AMOUNT_COLS = [{ wch: 11 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 48 }, { wch: 60 }];
 
 function appendSection(wb, label, result) {
   if (!result) return;

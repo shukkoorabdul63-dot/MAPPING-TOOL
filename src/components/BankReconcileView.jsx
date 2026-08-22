@@ -211,6 +211,7 @@ function ResultTables({ result }) {
             <table className="preview">
               <thead>
                 <tr>
+                  <th>Date</th>
                   <th className="ta-r">Amount</th>
                   <th className="ta-r">Stmt Count</th>
                   <th className="ta-r">Ledger Count</th>
@@ -222,6 +223,7 @@ function ResultTables({ result }) {
               <tbody>
                 {unmatchedByAmountPreview.map((e, i) => (
                   <tr key={i}>
+                    <td className="mono">{e.date}</td>
                     <td className="mono ta-r">{fmt(e.amount)}</td>
                     <td className="mono ta-r">{e.statementRows.length}</td>
                     <td className="mono ta-r">{e.ledgerRows.length}</td>
