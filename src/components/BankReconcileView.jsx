@@ -83,7 +83,9 @@ function ResultTables({ result }) {
                     <td>
                       <span className="pill navy">
                         {MATCH_TYPE_LABEL[m.matchType]}
-                        {m.matchType === "grouped" && m.groupSize ? ` ×${m.groupSize}` : ""}
+                        {(m.matchType === "grouped" || m.matchType === "paired") && m.groupSize
+                          ? ` ×${m.groupSize}`
+                          : ""}
                       </span>
                     </td>
                     <td className="mono">{m.ledgerRow.vchNo}</td>
@@ -123,8 +125,8 @@ function ResultTables({ result }) {
               </thead>
               <tbody>
                 {possibleMatchesPreview.map((s, i) => {
-                  const stmtRows = s.pairSide === "statement" ? s.pairRows : [s.singleRow];
-                  const ledgerRowsArr = s.pairSide === "ledger" ? s.pairRows : [s.singleRow];
+                  const stmtRows = s.pairSide === "statement" ? s.comboRows : [s.singleRow];
+                  const ledgerRowsArr = s.pairSide === "ledger" ? s.comboRows : [s.singleRow];
                   return (
                     <tr key={i}>
                       <td className="mono">{s.date}</td>

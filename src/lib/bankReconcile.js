@@ -247,8 +247,55 @@ function exactKey(date, amount) {
   return `${date}|${Math.round(amount * 100)}`;
 }
 
-function roundedKey(date, amount) {
-  return `${date}|${Math.round(amount)}`;
+// Tolerance for "rounded" matches. Under a rupee is treated as noise —
+// covers all common bank rounding styles (round-half-up, round-half-down,
+// truncate/floor) plus 0.99-paise oddities where the statement shows a
+// whole rupee and the ledger carries the fractional value.
+const ROUND_TOL = 1.0;
+
+// Widened "rounded" match: greedy file-order pairing within
+// |a - b| < ROUND_TOL. Runs O(n*m) per date. The prior Map-keyed
+// approach (Math.round(a) === Math.round(b)) missed cross-integer
+// cases like ₹289 (stmt) vs ₹289.54 (ledger, rounds to ₹290) even
+// though the diff is only 0.54.
+function passRoundedMatch(statementRows, ledgerRows, usedS, usedL, matched) {
+  const stmtByDate = new Map();
+  statementRows.forEach((r, i) => {
+    if (usedS[i]) return;
+    if (!stmtByDate.has(r.date)) stmtByDate.set(r.date, []);
+    stmtByDate.get(r.date).push(i);
+  });
+  const ledgerByDate = new Map();
+  ledgerRows.forEach((r, i) => {
+    if (usedL[i]) return;
+    if (!ledgerByDate.has(r.date)) ledgerByDate.set(r.date, []);
+    ledgerByDate.get(r.date).push(i);
+  });
+
+  for (const [date, sIdxs] of stmtByDate) {
+    const lIdxs = ledgerByDate.get(date);
+    if (!lIdxs || lIdxs.length === 0) continue;
+    for (const si of sIdxs) {
+      if (usedS[si]) continue;
+      const sAmt = statementRows[si].amount;
+      const foundLi = lIdxs.find(
+        (li) => !usedL[li] && Math.abs(ledgerRows[li].amount - sAmt) < ROUND_TOL
+      );
+      if (foundLi == null) continue;
+      usedS[si] = true;
+      usedL[foundLi] = true;
+      matched.push({
+        date,
+        amount: sAmt,
+        statementRow: statementRows[si],
+        ledgerRow: ledgerRows[foundLi],
+        matchType: "rounded",
+      });
+    }
+  }
+  // Ambiguity stat doesn't map cleanly to nested-scan pairing; the exact
+  // pass still contributes its (duplicated exact key) count.
+  return { ambiguousKeyCount: 0, ambiguousMatchCount: 0 };
 }
 
 // Pairs up rows from two pools that share a key (built by `keyOf`), marking
@@ -420,15 +467,21 @@ function passGroupedMatchLedger(statementRows, ledgerRows, usedS, usedL, matched
 // a tied target (more than one candidate pairing) is left for a human to
 // resolve with the Particulars/Card Ref columns, not decided here.
 //
-// `pairRows`/`pairUsed` is the side searched in 2-row combinations;
-// `singleRows`/`singleUsed` is the side each pair's sum is checked against.
-// `pairSide` labels which side that is, for the caller to render/export
-// both directions (ledger pairs -> one statement row, and the mirror)
-// through the same shape.
-function findGroupSuggestions(pairRows, pairUsed, singleRows, singleUsed, pairSide) {
+// `comboRows`/`comboUsed` is the side searched in 2- and 3-row
+// combinations; `singleRows`/`singleUsed` is the side each combo's sum
+// is checked against. `pairSide` (kept for backwards compat) labels
+// which side that is, for the caller to render/export both directions
+// (ledger combos -> one statement row, and the mirror) through the
+// same shape.
+//
+// Enumerates PAIRS (2-row) and TRIPLETS (3-row) — capped at 3 to keep
+// the search tractable and false-positive risk in check, and because a
+// customer's single card/UPI payment split into 4+ separate ledger
+// receipts (or the mirror) doesn't happen in practice.
+function findGroupSuggestions(comboRows, comboUsed, singleRows, singleUsed, pairSide) {
   const byDate = new Map();
-  pairRows.forEach((r, i) => {
-    if (pairUsed[i]) return;
+  comboRows.forEach((r, i) => {
+    if (comboUsed[i]) return;
     if (!byDate.has(r.date)) byDate.set(r.date, []);
     byDate.get(r.date).push(i);
   });
@@ -441,29 +494,46 @@ function findGroupSuggestions(pairRows, pairUsed, singleRows, singleUsed, pairSi
   });
 
   const suggestions = [];
+  const classify = (target, sum) => {
+    if (Math.abs(target - sum) < 0.01) return "exact";
+    if (Math.abs(target - sum) < ROUND_TOL) return "rounded";
+    return null;
+  };
+  const push = (date, idxs, si, sum, basis) => {
+    suggestions.push({
+      pairSide,
+      date,
+      comboRows: idxs.map((i) => comboRows[i]),
+      comboIdxs: idxs,
+      singleRow: singleRows[si],
+      singleIdx: si,
+      sum,
+      matchBasis: basis,
+    });
+  };
+
   for (const [date, idxs] of byDate) {
     const singleIdxs = singleByDate.get(date);
     if (!singleIdxs || singleIdxs.length === 0) continue;
+    // Pairs
     for (let a = 0; a < idxs.length; a++) {
       for (let b = a + 1; b < idxs.length; b++) {
-        const i = idxs[a];
-        const j = idxs[b];
-        const sum = pairRows[i].amount + pairRows[j].amount;
+        const sum2 = comboRows[idxs[a]].amount + comboRows[idxs[b]].amount;
         for (const si of singleIdxs) {
-          const target = singleRows[si].amount;
-          const isExact = Math.abs(target - sum) < 0.01;
-          const isRounded = !isExact && Math.round(target) === Math.round(sum);
-          if (!isExact && !isRounded) continue;
-          suggestions.push({
-            pairSide,
-            date,
-            pairRows: [pairRows[i], pairRows[j]],
-            pairIdxs: [i, j],
-            singleRow: singleRows[si],
-            singleIdx: si,
-            sum,
-            matchBasis: isExact ? "exact" : "rounded",
-          });
+          const basis = classify(singleRows[si].amount, sum2);
+          if (basis) push(date, [idxs[a], idxs[b]], si, sum2, basis);
+        }
+      }
+    }
+    // Triplets
+    for (let a = 0; a < idxs.length; a++) {
+      for (let b = a + 1; b < idxs.length; b++) {
+        for (let c = b + 1; c < idxs.length; c++) {
+          const sum3 = comboRows[idxs[a]].amount + comboRows[idxs[b]].amount + comboRows[idxs[c]].amount;
+          for (const si of singleIdxs) {
+            const basis = classify(singleRows[si].amount, sum3);
+            if (basis) push(date, [idxs[a], idxs[b], idxs[c]], si, sum3, basis);
+          }
         }
       }
     }
@@ -477,7 +547,7 @@ export function matchBankReconcile(statementRows, ledgerRows) {
   const matched = [];
 
   const exact = passKeyMatch(statementRows, ledgerRows, usedS, usedL, matched, exactKey, "exact");
-  const rounded = passKeyMatch(statementRows, ledgerRows, usedS, usedL, matched, roundedKey, "rounded");
+  const rounded = passRoundedMatch(statementRows, ledgerRows, usedS, usedL, matched);
   const groupedStatement = passGroupedMatchStatement(statementRows, ledgerRows, usedS, usedL, matched);
   const groupedLedger = passGroupedMatchLedger(statementRows, ledgerRows, usedS, usedL, matched);
 
@@ -505,55 +575,56 @@ export function matchBankReconcile(statementRows, ledgerRows) {
   // suggestions share a pair iff they name the same two rows on the
   // same side.
   const targetCount = new Map();
-  const pairCount = new Map();
-  const pairKey = (s) => {
-    const [a, b] = s.pairIdxs[0] < s.pairIdxs[1] ? s.pairIdxs : [s.pairIdxs[1], s.pairIdxs[0]];
-    return `${s.pairSide}|${a}|${b}`;
-  };
+  const comboCount = new Map();
+  const comboKey = (s) => `${s.pairSide}|${[...s.comboIdxs].sort((a, b) => a - b).join("-")}`;
   for (const s of rawSuggestions) {
     targetCount.set(s.singleRow, (targetCount.get(s.singleRow) || 0) + 1);
-    const pk = pairKey(s);
-    pairCount.set(pk, (pairCount.get(pk) || 0) + 1);
+    const pk = comboKey(s);
+    comboCount.set(pk, (comboCount.get(pk) || 0) + 1);
   }
 
   const possibleMatches = [];
+  let pairedMatchCount = 0;
   for (const s of rawSuggestions) {
-    const unambiguous = targetCount.get(s.singleRow) === 1 && pairCount.get(pairKey(s)) === 1;
+    const unambiguous = targetCount.get(s.singleRow) === 1 && comboCount.get(comboKey(s)) === 1;
     if (!unambiguous) {
       possibleMatches.push(s);
       continue;
     }
-    // Flip the used bits and push one matched entry per pair row using
+    // Flip the used bits and push one matched entry per combo row using
     // the same shape the identity-based grouping passes produce, so
     // downstream stat aggregation and rendering stays consistent. The
-    // pair side determines which array holds the pair vs the single.
+    // pair side determines which array holds the combo vs the single.
+    // groupSize is 2 for pairs or 3 for triplets.
+    const size = s.comboIdxs.length;
     if (s.pairSide === "ledger") {
       usedS[s.singleIdx] = true;
-      for (const li of s.pairIdxs) usedL[li] = true;
-      for (const li of s.pairIdxs) {
+      for (const li of s.comboIdxs) usedL[li] = true;
+      for (const li of s.comboIdxs) {
         matched.push({
           date: s.date,
           amount: ledgerRows[li].amount,
           statementRow: statementRows[s.singleIdx],
           ledgerRow: ledgerRows[li],
           matchType: "paired",
-          groupSize: 2,
+          groupSize: size,
         });
       }
     } else {
       usedL[s.singleIdx] = true;
-      for (const si of s.pairIdxs) usedS[si] = true;
-      for (const si of s.pairIdxs) {
+      for (const si of s.comboIdxs) usedS[si] = true;
+      for (const si of s.comboIdxs) {
         matched.push({
           date: s.date,
           amount: statementRows[si].amount,
           statementRow: statementRows[si],
           ledgerRow: ledgerRows[s.singleIdx],
           matchType: "paired",
-          groupSize: 2,
+          groupSize: size,
         });
       }
     }
+    pairedMatchCount++;
   }
 
   const unmatchedStatement = statementRows.filter((_, i) => !usedS[i]);
@@ -616,7 +687,7 @@ export function matchBankReconcile(statementRows, ledgerRows) {
       groupedMatchCount: groupedStatement.groupedMatchCount + groupedLedger.groupedMatchCount,
       groupedStatementRowCount: groupedStatement.groupedStatementRowCount,
       groupedLedgerRowCount: groupedLedger.groupedLedgerRowCount,
-      pairedMatchCount: matched.filter((m) => m.matchType === "paired").length / 2,
+      pairedMatchCount,
       unmatchedStatementCount: unmatchedStatement.length,
       unmatchedStatementSum: sum(unmatchedStatement, (r) => r.amount),
       unmatchedLedgerCount: unmatchedLedger.length,
@@ -699,8 +770,8 @@ function unmatchedByAmountToAOA(rows) {
 
 function possibleMatchesToAOA(rows) {
   return rows.map((s) => {
-    const stmtRows = s.pairSide === "statement" ? s.pairRows : [s.singleRow];
-    const ledgerRowsArr = s.pairSide === "ledger" ? s.pairRows : [s.singleRow];
+    const stmtRows = s.pairSide === "statement" ? s.comboRows : [s.singleRow];
+    const ledgerRowsArr = s.pairSide === "ledger" ? s.comboRows : [s.singleRow];
     return [
       s.date,
       stmtRows.map((r) => r.amount).join(" + "),
